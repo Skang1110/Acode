@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="id">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Manusia Seutuhnya V3 - Jelly Bean Real Time</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+                font-family: "Roboto Condensed", Arial, sans-serif;
+            }
+            body {
+                background: #0a1a2e;
+                color: #fff;
+                padding-bottom: 80px;
+            }
+            .status {
+                background: #000;
+                padding: 8px 12px;
+                font-size: 13px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .status b {
+                color: #33b5e5;
+                font-size: 14px;
+                letter-spacing: 1px;
+            }
+            .action {
+                background: #1a1a1a;
+                padding: 14px 16px;
+                border-bottom: 4px solid #33b5e5;
+            }
+            .action h1 {
+                font-size: 20px;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+            .action p {
+                color: #aaa;
+                font-size: 13px;
+            }
+            .wrap {
+                padding: 14px;
+            }
+            .quote {
+                background: #fff;
+                color: #111;
+                padding: 20px;
+            }
+            .quote p {
+                font-size: 21px;
+                line-height: 1.4;
+                font-style: italic;
+            }
+            .quote span {
+                display: block;
+                margin-top: 12px;
+                color: #0099cc;
+                font-weight: bold;
+                font-size: 13px;
+            }
+            .btn-row {
+                display: flex;
+                gap: 8px;
+                margin-top: 12px;
+            }
+            button {
+                flex: 1;
+                background: #33b5e5;
+                border: none;
+                color: #fff;
+                padding: 12px;
+                font-weight: bold;
+                text-transform: uppercase;
+                cursor: pointer;
+                box-shadow: 0 2px 0 #0077a3;
+            }
+            button:active {
+                transform: translateY(2px);
+                box-shadow: none;
+            }
+            button.grey {
+                background: #444;
+                box-shadow: 0 2px 0 #111;
+            }
+            button.green {
+                background: #99cc00;
+                box-shadow: 0 2px 0 #669900;
+            }
+            .score {
+                text-align: center;
+                background: #0099cc;
+                padding: 12px;
+                margin-top: 14px;
+            }
+            .score b {
+                font-size: 26px;
+            }
+            .tabs {
+                display: flex;
+                margin-top: 14px;
+                background: #111;
+            }
+            .tabs button {
+                background: #222;
+                color: #fff;
+                box-shadow: none;
+                border-bottom: 3px solid transparent;
+            }
+            .tabs button.active {
+                background: #333;
+                border-bottom: 3px solid #33b5e5;
+                color: #33b5e5;
+            }
+            .section {
+                display: none;
+                margin-top: 14px;
+            }
+            .section.active {
+                display: block;
+            }
+            .card {
+                background: #1e1e1e;
+                padding: 14px;
+                margin-top: 10px;
+                border-left: 8px solid #33b5e5;
+            }
+            .card.green {
+                border-color: #99cc00;
+            }
+            .card.orange {
+                border-color: #ff8800;
+            }
+            .card.purple {
+                border-color: #aa00ff;
+            }
+            .card.red {
+                border-color: #ff4444;
+            }
+            .card h3 {
+                font-size: 15px;
+                letter-spacing: 1px;
+            }
+            .card p,
+            .card li {
+                font-size: 14px;
+                color: #ccc;
+                line-height: 1.5;
+                margin-top: 6px;
+            }
+            .card ul {
+                margin-left: 16px;
+            }
+            .card b {
+                color: #fff;
+            }
+            .bar {
+                background: #333;
+                height: 14px;
+                margin: 10px 0;
+            }
+            .fill {
+                height: 100%;
+                background: #33b5e5;
+                width: 0%;
+                transition: 0.4s;
+            }
+            .green .fill {
+                background: #99cc00;
+            }
+            .orange .fill {
+                background: #ff8800;
+            }
+            .purple .fill {
+                background: #aa00ff;
+            }
+            .check {
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+                margin-top: 8px;
+            }
+            .check label {
+                background: #333;
+                padding: 8px 10px;
+                font-size: 13px;
+                cursor: pointer;
+            }
+            .journal {
+                background: #fff;
+                color: #111;
+                padding: 14px;
+                margin-top: 14px;
+            }
+            .journal textarea {
+                width: 100%;
+                height: 80px;
+                padding: 10px;
+                margin-top: 8px;
+            }
+            .journal ul {
+                list-style: none;
+                margin-top: 10px;
+            }
+            .journal li {
+                background: #eee;
+                padding: 8px;
+                margin-top: 6px;
+                font-size: 14px;
+            }
+            /* POPUP HOME */
+            .popup {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.8);
+                display: none;
+                align-items: center;
+                justify-content: center;
+                z-index: 99;
+                padding: 20px;
+            }
+            .popup.show {
+                display: flex;
+            }
+            .popup-box {
+                background: #fff;
+                color: #111;
+                width: 100%;
+                max-width: 400px;
+                padding: 20px;
+                border-top: 6px solid #33b5e5;
+            }
+            .popup-box h2 {
+                font-size: 18px;
+                text-transform: uppercase;
+            }
+            .popup-box p {
+                font-size: 14px;
+                line-height: 1.6;
+                margin-top: 10px;
+            }
+            .popup-box b {
+                color: #0099cc;
+            }
+            .nav {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                background: #111;
+                display: flex;
+                justify-content: space-around;
+                padding: 14px 0;
+                border-top: 1px solid #333;
+                z-index: 10;
+            }
+            .nav b {
+                color: #33b5e5;
+                font-size: 13px;
+                cursor: pointer;
+            }
+            .nav span {
+                color: #fff;
+                font-size: 13px;
+                cursor: pointer;
+            }
+            .badge {
+                display: inline-block;
+                background: #ff8800;
+                color: #fff;
+                padding: 3px 8px;
+                font-size: 11px;
+                margin-top: 6px;
+            }
+        </style>
+    </head>
+    <body>
+        <!-- STATUS BAR REAL TIME -->
+        <div class="status">
+            <span><b id="clock">00:00:00</b> • <span id="dateNow">-</span></span
+            ><span id="greeting">Selamat Datang</span>
+        </div>
+        <div class="action">
+            <h1>Manusia Seutuhnya V3</h1>
+            <p id="greeting2">Jelly Bean • Real Time • Holo Theme</p>
+        </div>
+
+        <div class="wrap">
+            <div class="quote">
+                <p id="quoteText">
+                    “Untuk berkembang menjadi manusia seutuhnya, kita memerlukan
+                    pendidikan mental, fisik, emosional, dan spiritual.”
+                </p>
+                <span>- PENDIDIKAN HOLISTIK -</span>
+                <div class="btn-row">
+                    <button onclick="nextQuote()">Quote Lain ➜</button
+                    ><button class="grey" onclick="copyQuote()">Salin</button>
+                </div>
+            </div>
+
+            <div class="score">
+                SKOR SEUTUHNYA<br /><b id="totalScore">0%</b> • Streak:
+                <b id="streak">0</b> hari • Level: <b id="level">Pemula</b
+                ><br /><small id="nextTask" style="font-size: 13px"
+                    >Memuat tugas selanjutnya...</small
+                >
+            </div>
+
+            <div class="tabs">
+                <button class="active" onclick="showTab('tracker', this)">
+                    TRACKER
+                </button>
+                <button onclick="showTab('rule', this)">RULE</button>
+                <button onclick="showTab('cara', this)">TATA CARA</button>
+                <button onclick="showTab('perlu', this)">YANG DIPERLUIN</button>
+            </div>
+
+            <div id="tracker" class="section active">
+                <div id="pilars"></div>
+                <div class="journal">
+                    <h3>📝 Jurnal Hari Ini</h3>
+                    <textarea
+                        id="jurnal"
+                        placeholder="Tulis apa yang lu pelajari hari ini..."
+                    ></textarea
+                    ><button onclick="saveJurnal()">Simpan Jurnal</button>
+                    <ul id="jurnalList"></ul>
+                </div>
+            </div>
+
+            <div id="rule" class="section">
+                <div class="card red">
+                    <h3>📜 RULE UTAMA</h3>
+                    <ul>
+                        <li>
+                            <b>Rule 1 - Jangan Bolos 2 Hari:</b> Bolos 1 hari
+                            boleh, besok WAJIB balas 2x. Bolos 2 hari = streak
+                            reset 0.
+                        </li>
+                        <li>
+                            <b>Rule 2 - Minimal 1 Per Pilar:</b> Tiap hari
+                            minimal 1 tugas di tiap pilar.
+                        </li>
+                        <li>
+                            <b>Rule 3 - Skor < 50% = Hutang:</b> Besok wajib
+                            80%+.
+                        </li>
+                        <li>
+                            <b>Rule 4 - No HP 1 Jam Sebelum Tidur:</b> Jam 22.00
+                            HP taruh.
+                        </li>
+                        <li>
+                            <b>Rule 5 - Jujur:</b> Jangan centang yang ga
+                            dilakuin.
+                        </li>
+                        <li>
+                            <b>Rule 6 - Evaluasi Mingguan:</b> Minggu malam liat
+                            pilar terendah.
+                        </li>
+                    </ul>
+                    <span class="badge">LANGGAR 3x = ULANG DARI LEVEL 1</span>
+                </div>
+            </div>
+
+            <div id="cara" class="section">
+                <div class="card green">
+                    <h3>🌅 PAGI (05.30 - 08.00) - FISIK + SPIRITUAL</h3>
+                    <ul>
+                        <li>Bangun, jangan pegang HP 30 menit</li>
+                        <li>Sholat / Doa / Meditasi 10 menit</li>
+                        <li>Minum 2 gelas + olahraga 20 menit</li>
+                        <li>Tulis 1 target hari ini</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h3>☀️ SIANG (08.00 - 17.00) - MENTAL + EMOSIONAL</h3>
+                    <ul>
+                        <li>Fokus 50 menit, istirahat 10 menit</li>
+                        <li>Baca 10 menit, bukan sosmed</li>
+                        <li>Ngobrol / bantu 1 orang</li>
+                    </ul>
+                </div>
+                <div class="card purple">
+                    <h3>🌙 MALAM (19.00 - 22.00) - EVALUASI</h3>
+                    <ul>
+                        <li>Cek Tracker, centang tugas</li>
+                        <li>Tulis Jurnal + 3 syukur</li>
+                        <li>Jam 22.00 matiin HP, tidur</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div id="perlu" class="section">
+                <div class="card">
+                    <h3>🎒 YANG WAJIB ADA</h3>
+                    <ul>
+                        <li><b>HP / Laptop</b> - Buka app ini</li>
+                        <li><b>Buku + Pulpen</b> - Buat jurnal</li>
+                        <li>
+                            <b>Botol Air 1 Liter</b> - Target 2 liter / hari
+                        </li>
+                        <li><b>Timer / Alarm</b> - Alarm 05.30 & 22.00</li>
+                        <li><b>Tempat Tenang</b> - Buat meditasi & jurnal</li>
+                    </ul>
+                </div>
+                <div class="card red">
+                    <h3>🚫 YANG DIJAUHIN</h3>
+                    <ul>
+                        <li>Scroll TikTok / IG tanpa tujuan - max 30 menit</li>
+                        <li>Begadang ga jelas</li>
+                        <li>Ngopi / rokok berlebihan</li>
+                    </ul>
+                </div>
+                <button
+                    class="green"
+                    style="margin-top: 12px"
+                    onclick="alert('Semangat bre! Mulai hari ini.')"
+                >
+                    ✅ SAYA SIAP MULAI
+                </button>
+            </div>
+            <p
+                style="
+                    text-align: center;
+                    color: #888;
+                    font-size: 12px;
+                    margin-top: 16px;
+                "
+            >
+                Jelly Bean • Real Time • Offline
+            </p>
+        </div>
+
+        <!-- POPUP HOME -->
+        <div id="homePopup" class="popup" onclick="closeHome()">
+            <div class="popup-box" onclick="event.stopPropagation()">
+                <h2>🏠 HOME - <span id="popupTime">00:00</span></h2>
+                <p id="popupContent">Memuat...</p>
+                <button onclick="closeHome()">Tutup & Lanjut</button>
+                <button
+                    class="grey"
+                    onclick="
+                        closeHome();
+                        showTab(
+                            'tracker',
+                            document.querySelector('.tabs button')
+                        );
+                    "
+                >
+                    Ke Tracker ➜
+                </button>
+            </div>
+        </div>
+
+        <div class="nav">
+            <b onclick="goHome()">◀ HOME</b
+            ><span
+                onclick="
+                    showTab('tracker', document.querySelector('.tabs button'));
+                    window.scrollTo(0, 0);
+                "
+                >＋ TRACKER</span
+            ><span onclick="resetAll()">⚙ RESET</span>
+        </div>
+
+        <script>
+            // === JAM REAL TIME ===
+            function updateClock() {
+                const now = new Date();
+                const hh = String(now.getHours()).padStart(2, "0");
+                const mm = String(now.getMinutes()).padStart(2, "0");
+                const ss = String(now.getSeconds()).padStart(2, "0");
+                document.getElementById("clock").innerText =
+                    hh + ":" + mm + ":" + ss;
+                const hari = [
+                    "Minggu",
+                    "Senin",
+                    "Selasa",
+                    "Rabu",
+                    "Kamis",
+                    "Jumat",
+                    "Sabtu"
+                ][now.getDay()];
+                const bulan = [
+                    "Jan",
+                    "Feb",
+                    "Mar",
+                    "Apr",
+                    "Mei",
+                    "Jun",
+                    "Jul",
+                    "Agu",
+                    "Sep",
+                    "Okt",
+                    "Nov",
+                    "Des"
+                ][now.getMonth()];
+                document.getElementById("dateNow").innerText =
+                    hari +
+                    ", " +
+                    now.getDate() +
+                    " " +
+                    bulan +
+                    " " +
+                    now.getFullYear();
+                let greet = "",
+                    rekom = "";
+                let h = now.getHours();
+                if (h >= 4 && h < 11) {
+                    greet = "🌅 Selamat Pagi Bre!";
+                    rekom =
+                        "Waktunya FISIK + SPIRITUAL: Olahraga 20 menit + Doa / Meditasi. Jangan pegang HP dulu 30 menit!";
+                } else if (h >= 11 && h < 15) {
+                    greet = "☀️ Selamat Siang Bre!";
+                    rekom =
+                        "Waktunya MENTAL: Belajar fokus 50 menit + Baca 10 menit. Jangan scroll ga jelas!";
+                } else if (h >= 15 && h < 18) {
+                    greet = "🌤️ Selamat Sore Bre!";
+                    rekom =
+                        "Waktunya EMOSIONAL: Ngobrol sama keluarga / temen, maafin 1 hal hari ini.";
+                } else if (h >= 18 && h < 22) {
+                    greet = "🌙 Selamat Malam Bre!";
+                    rekom =
+                        "Waktunya EVALUASI: Cek Tracker, tulis Jurnal + 3 syukur. Siap-siap tidur jam 22.00!";
+                } else {
+                    greet = "🌌 Udah Malem Bre, Tidur!";
+                    rekom =
+                        "HP taruh bre! Besok bangun jam 05.30. Skor lu bakal reset kalo begadang.";
+                }
+                document.getElementById("greeting").innerText = greet;
+                document.getElementById("greeting2").innerText =
+                    greet + " • Jelly Bean Real Time";
+                document.getElementById("nextTask").innerText = rekom;
+                document.getElementById("popupTime").innerText = hh + ":" + mm;
+                window._rekom = rekom;
+                window._greet = greet;
+            }
+            setInterval(updateClock, 1000);
+            updateClock();
+
+            // === HOME BUTTON ===
+            function goHome() {
+                window.scrollTo({ top: 0, behavior: "smooth" });
+                let score = document.getElementById("totalScore").innerText;
+                let totalTugas = 16;
+                let done = 0;
+                data.forEach(p => {
+                    done += (state[p.id] || []).length;
+                });
+                let belum = totalTugas - done;
+                let msg = `<b>${window._greet}</b><br><br>Skor lu hari ini: <b>${score}</b><br>Udah kelar: <b>${done} / ${totalTugas}</b> tugas<br>Sisa: <b>${belum}</b> tugas lagi.<br><br><b>Rekomendasi sekarang:</b><br>${window._rekom}<br><br>${belum === 0 ? "🔥 GILA, UDAH 100% HARI INI! Lu Manusia Seutuhnya hari ini bre!" : "💪 Gas bre, sisa " + belum + " lagi, bisa kelar sebelum tidur!"}`;
+                document.getElementById("popupContent").innerHTML = msg;
+                document.getElementById("homePopup").classList.add("show");
+            }
+            function closeHome() {
+                document.getElementById("homePopup").classList.remove("show");
+            }
+
+            const quotes = [
+                "“Untuk berkembang menjadi manusia seutuhnya, kita memerlukan pendidikan mental, fisik, emosional, dan spiritual.”",
+                "“Mental yang kuat tanpa fisik yang sehat itu pincang.”",
+                "“Emosi yang tidak dilatih akan mengendalikanmu.”",
+                "“Spiritual bukan soal agama saja, tapi soal makna hidup.”",
+                "“Seimbang itu bukan 100% di semua hal, tapi sadar mana yang kurang.”",
+                "“Hari ini 1% lebih baik dari kemarin, itu sudah seutuhnya.”"
+            ];
+            const data = [
+                {
+                    id: "mental",
+                    name: "MENTAL",
+                    color: "",
+                    tasks: [
+                        "Baca 10 menit",
+                        "Belajar skill baru",
+                        "Meditasi 5 menit",
+                        "No scroll 1 jam"
+                    ]
+                },
+                {
+                    id: "fisik",
+                    name: "FISIK",
+                    color: "green",
+                    tasks: [
+                        "Olahraga 20 menit",
+                        "Minum 8 gelas",
+                        "Tidur < 23.00",
+                        "No junk food"
+                    ]
+                },
+                {
+                    id: "emosional",
+                    name: "EMOSIONAL",
+                    color: "orange",
+                    tasks: [
+                        "Ngobrol sama keluarga",
+                        "Memaafkan 1 hal",
+                        "Tulis 3 syukur",
+                        "Tidak marah seharian"
+                    ]
+                },
+                {
+                    id: "spiritual",
+                    name: "SPIRITUAL",
+                    color: "purple",
+                    tasks: [
+                        "Sholat / Doa tepat waktu",
+                        "Baca kitab 5 menit",
+                        "Sedekah",
+                        "Renung 10 menit"
+                    ]
+                }
+            ];
+            let state = JSON.parse(localStorage.getItem("seutuhnya") || "{}");
+            let jurnal = JSON.parse(localStorage.getItem("jurnal") || "[]");
+            function showTab(id, btn) {
+                document
+                    .querySelectorAll(".section")
+                    .forEach(s => s.classList.remove("active"));
+                document.getElementById(id).classList.add("active");
+                document
+                    .querySelectorAll(".tabs button")
+                    .forEach(b => b.classList.remove("active"));
+                if (btn) btn.classList.add("active");
+            }
+            function render() {
+                let html = "";
+                data.forEach(p => {
+                    let checked = state[p.id] || [];
+                    let pct = Math.round(
+                        (checked.length / p.tasks.length) * 100
+                    );
+                    html += `<div class="card ${p.color}"><h3>${p.name}</h3><small>Progress: ${pct}% • ${checked.length}/${p.tasks.length}</small><div class="bar"><div class="fill" style="width:${pct}%"></div></div><div class="check">`;
+                    p.tasks.forEach((t, i) => {
+                        html += `<label><input type="checkbox" ${checked.includes(i) ? "checked" : ""} onchange="toggle('${p.id}',${i})"> ${t}</label>`;
+                    });
+                    html += "</div></div>";
+                });
+                document.getElementById("pilars").innerHTML = html;
+                let total = 0;
+                data.forEach(p => {
+                    total += (state[p.id] || []).length / p.tasks.length;
+                });
+                let score = Math.round((total / 4) * 100);
+                document.getElementById("totalScore").innerText = score + "%";
+                let lvl =
+                    score <= 30
+                        ? "Pemula"
+                        : score <= 60
+                          ? "Pejuang"
+                          : score <= 80
+                            ? "Petarung"
+                            : score <= 95
+                              ? "Master"
+                              : "Manusia Seutuhnya";
+                document.getElementById("level").innerText = lvl;
+                document.getElementById("streak").innerText =
+                    localStorage.getItem("streak") || "0";
+                document.getElementById("jurnalList").innerHTML = jurnal
+                    .map(j => `<li>${j}</li>`)
+                    .join("");
+            }
+            function toggle(id, i) {
+                if (!state[id]) state[id] = [];
+                let idx = state[id].indexOf(i);
+                if (idx >= 0) state[id].splice(idx, 1);
+                else state[id].push(i);
+                localStorage.setItem("seutuhnya", JSON.stringify(state));
+                render();
+            }
+            let qi = 0;
+            function nextQuote() {
+                qi = (qi + 1) % quotes.length;
+                document.getElementById("quoteText").innerText = quotes[qi];
+            }
+            function copyQuote() {
+                navigator.clipboard.writeText(
+                    document.getElementById("quoteText").innerText
+                );
+                alert("Disalin bre!");
+            }
+            function saveJurnal() {
+                let v = document.getElementById("jurnal").value.trim();
+                if (!v) return alert("Isi dulu bre");
+                jurnal.unshift(
+                    new Date().toLocaleDateString("id-ID") + " - " + v
+                );
+                localStorage.setItem("jurnal", JSON.stringify(jurnal));
+                document.getElementById("jurnal").value = "";
+                render();
+            }
+            function resetAll() {
+                if (confirm("Reset semua?")) {
+                    localStorage.clear();
+                    state = {};
+                    jurnal = [];
+                    render();
+                }
+            }
+            render();
+        </script>
+    </body>
+</html>
