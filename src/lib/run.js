@@ -1,7 +1,8 @@
 import fsOperation from "fileSystem";
+import { getDocText } from "cm/editorUtils";
 import tutorial from "components/tutorial";
 import alert from "dialogs/alert";
-import box from "dialogs/box";
+import dialog from "dialogs/dialog";
 import markdownIt from "markdown-it";
 import anchor from "markdown-it-anchor";
 import MarkdownItGitHubAlerts from "markdown-it-github-alerts";
@@ -13,13 +14,16 @@ import helpers from "utils/helpers";
 import Url from "utils/Url";
 import $_console from "views/console.hbs";
 import $_markdown from "views/markdown.hbs";
-import constants from "./constants";
+import config from "./config";
 import EditorFile from "./editorFile";
 import openFolder from "./openFolder";
 import appSettings from "./settings";
 
 /**@type {Server} */
 let webServer;
+
+// An open console may outlive the server instance that created it.
+const CONSOLE_THEME_STATE = "__acode_console_theme.json";
 
 /**
  * Starts the server and run the active file in browser
@@ -68,9 +72,14 @@ async function run(
 	let isLoading = false;
 	let filename, pathName, extension;
 	let port = appSettings.value.serverPort;
-	let EXECUTING_SCRIPT = uuid + "_script.js";
+	let shouldExecuteScript = false;
 	const MIMETYPE_HTML = mimeType.lookup("html");
 	const CONSOLE_SCRIPT = uuid + "_console.js";
+	const CONSOLE_WORKER_SCRIPT = uuid + "_console_worker.js";
+	// Keep this route independent of the filename because characters such as
+	// "#" and "?" change how browsers parse a URL.
+	const EXECUTING_SCRIPT = uuid + "_script.js";
+	const CONSOLE_THEME_STYLE = uuid + "_console_theme.css";
 	const MARKDOWN_STYLE = uuid + "_md.css";
 	const queue = [];
 
@@ -92,7 +101,7 @@ async function run(
 				type: mimeType.lookup(extension),
 			});
 
-			box(filename, `<img src='${URL.createObjectURL(blob)}'>`);
+			dialog(filename, `<img src='${URL.createObjectURL(blob)}'>`);
 		} catch (err) {
 			helpers.error(err);
 		}
@@ -137,12 +146,12 @@ async function run(
 	}
 
 	function runConsole() {
-		if (!isConsole) EXECUTING_SCRIPT = activeFile.filename;
+		if (!isConsole) shouldExecuteScript = true;
 		isConsole = true;
 		target = "inapp";
 		filename = "console.html";
 		pathName = `${ASSETS_DIRECTORY}www/`;
-		port = constants.CONSOLE_PORT;
+		port = config.CONSOLE_PORT;
 	}
 
 	function start() {
@@ -204,8 +213,25 @@ async function run(
 				sendFileContent(url, reqId, "application/javascript");
 				break;
 
+			case CONSOLE_WORKER_SCRIPT:
+				url = `${ASSETS_DIRECTORY}/build/consoleWorker.js`;
+				sendFileContent(url, reqId, "application/javascript");
+				break;
+
+			case CONSOLE_THEME_STYLE:
+				sendText(getConsoleThemeSnapshot().css, reqId, "text/css");
+				break;
+
+			case CONSOLE_THEME_STATE:
+				sendText(
+					JSON.stringify(getConsoleThemeSnapshot()),
+					reqId,
+					"application/json",
+				);
+				break;
+
 			case EXECUTING_SCRIPT: {
-				const text = activeFile?.session?.doc?.toString() || "";
+				const text = getDocText(activeFile?.session?.doc);
 				sendText(text, reqId, "application/javascript");
 				break;
 			}
@@ -227,7 +253,11 @@ async function run(
 					sendText(
 						mustache.render($_console, {
 							CONSOLE_SCRIPT,
-							EXECUTING_SCRIPT,
+							CONSOLE_WORKER_SCRIPT,
+							CONSOLE_THEME_STYLE,
+							CONSOLE_THEME_STATE,
+							EXECUTING_SCRIPT: shouldExecuteScript ? EXECUTING_SCRIPT : null,
+							APP_THEME_TYPE: getConsoleThemeSnapshot().type,
 						}),
 						reqId,
 						MIMETYPE_HTML,
@@ -241,10 +271,10 @@ async function run(
 				}
 			}
 
-			if (activeFile.mode === "single") {
+			if (activeFile.SAFMode === "single") {
 				if (filename === reqPath) {
 					sendText(
-						activeFile.session?.doc?.toString(),
+						getDocText(activeFile.session?.doc),
 						reqId,
 						mimeType.lookup(filename),
 					);
@@ -260,8 +290,13 @@ async function run(
 			if (pathName) {
 				url = Url.join(pathName, reqPath);
 				file = editorManager.getFile(url, "uri");
-			} else if (!activeFile.uri) {
+			} else if (!activeFile.uri && filename === reqPath) {
 				file = activeFile;
+			}
+
+			if (!url && !file) {
+				error(reqId);
+				return;
 			}
 
 			// Handle extensionless URLs (e.g., "about" -> "about.html" or "about/index.html")
@@ -278,7 +313,7 @@ async function run(
 				const htmlUrl = Url.join(pathName, reqPath + ".html");
 				const htmlFile = editorManager.getFile(htmlUrl, "uri");
 				if (htmlFile?.loaded && htmlFile.isUnsaved) {
-					sendHTML(htmlFile.session?.doc?.toString(), reqId);
+					sendHTML(getDocText(htmlFile.session?.doc), reqId);
 					return;
 				}
 				const htmlFs = fsOperation(htmlUrl);
@@ -302,8 +337,8 @@ async function run(
 			switch (ext) {
 				case ".htm":
 				case ".html":
-					if (file && file.loaded && file.isUnsaved) {
-						sendHTML(file.session?.doc?.toString(), reqId);
+					if (!url || (file && file.loaded && file.isUnsaved)) {
+						sendHTML(getDocText(file.session?.doc), reqId);
 					} else {
 						sendFileContent(url, reqId, MIMETYPE_HTML);
 					}
@@ -320,7 +355,7 @@ async function run(
 										.toLowerCase()
 										.replace(/[^a-z0-9]+/g, "-"),
 							})
-							.render(file.session?.doc?.toString());
+							.render(getDocText(file.session?.doc));
 						const doc = mustache.render($_markdown, {
 							html,
 							filename,
@@ -331,9 +366,9 @@ async function run(
 					break;
 
 				default:
-					if (file && file.loaded && file.isUnsaved) {
+					if (!url || (file && file.loaded && file.isUnsaved)) {
 						sendText(
-							file.session?.doc?.toString(),
+							getDocText(file.session?.doc),
 							reqId,
 							mimeType.lookup(file.filename),
 						);
@@ -349,6 +384,13 @@ async function run(
 					break;
 			}
 		}
+	}
+
+	function getConsoleThemeSnapshot() {
+		return {
+			css: document.head.querySelector("style#app-theme")?.textContent || "",
+			type: document.body.getAttribute("theme-type") || "dark",
+		};
 	}
 
 	/**
@@ -378,7 +420,8 @@ async function run(
 	 * @param {string} id
 	 */
 	function sendHTML(text, id) {
-		const js = `<!-- Injected code, this is not present in original code --><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		const js = `<!-- Injected code, this is not present in original code --><meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <script class="${uuid}">window.__consoleWorkerScript = "/${CONSOLE_WORKER_SCRIPT}";</script>
     <script class="${uuid}" src="/${CONSOLE_SCRIPT}" crossorigin="anonymous"></script>
     <script class="${uuid}">
       if(window.eruda){

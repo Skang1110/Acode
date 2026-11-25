@@ -7,8 +7,9 @@ import * as cmLint from "@codemirror/lint";
 import * as cmSearch from "@codemirror/search";
 import * as cmState from "@codemirror/state";
 import * as cmView from "@codemirror/view";
-import ajax from "@deadlyjack/ajax";
+import * as lezerCommon from "@lezer/common";
 import * as lezerHighlight from "@lezer/highlight";
+import * as lezerLR from "@lezer/lr";
 import {
 	getRegisteredCommands as listRegisteredCommands,
 	refreshCommandKeymap,
@@ -21,6 +22,7 @@ import lspClientManager from "cm/lsp/clientManager";
 import { registerLspFormatter } from "cm/lsp/formatter";
 import {
 	addMode,
+	getFormatAsMode,
 	getModeForPath,
 	getModes,
 	getModesByName,
@@ -37,46 +39,59 @@ import { TerminalManager, TerminalThemeManager } from "components/terminal";
 import toast from "components/toast";
 import tutorial from "components/tutorial";
 import alert from "dialogs/alert";
-import box from "dialogs/box";
 import colorPicker from "dialogs/color";
 import confirm from "dialogs/confirm";
+import dialog from "dialogs/dialog";
 import loader from "dialogs/loader";
 import multiPrompt from "dialogs/multiPrompt";
 import prompt from "dialogs/prompt";
 import select from "dialogs/select";
 import { addIntentHandler, removeIntentHandler } from "handlers/intent";
 import keyboardHandler from "handlers/keyboard";
-import purchaseListener from "handlers/purchase";
 import windowResize from "handlers/windowResize";
 import actionStack from "lib/actionStack";
 import commands from "lib/commands";
 import EditorFile from "lib/editorFile";
+import fileIcons from "lib/fileIcons";
+import fileIndex from "lib/fileIndex";
 import files from "lib/fileList";
 import fileTypeHandler from "lib/fileTypeHandler";
 import fonts from "lib/fonts";
+import fullscreen from "lib/fullscreen";
 import {
 	BROKEN_PLUGINS,
 	LOADED_PLUGINS,
 	onPluginLoadCallback,
 	onPluginsLoadCompleteCallback,
 } from "lib/loadPlugins";
-import NotificationManager from "lib/notificationManager";
+import notificationManager from "lib/notificationManager";
 import openFolder, { addedFolder } from "lib/openFolder";
+import orientation from "lib/orientation";
 import projects from "lib/projects";
 import selectionMenu from "lib/selectionMenu";
 import appSettings from "lib/settings";
 import FileBrowser from "pages/fileBrowser";
-import formatterSettings from "settings/formatterSettings";
 import ThemeBuilder from "theme/builder";
 import themes from "theme/list";
+import {
+	applyHighlightStyles,
+	clearHighlightCache,
+	getHighlightStyleSheet,
+	getHighlightStyles,
+	HIGHLIGHT_CLASS,
+	highlightCodeBlock,
+	highlightLine,
+} from "utils/codeHighlight";
 import Color from "utils/color";
 import encodings, { decode, encode } from "utils/encodings";
 import helpers from "utils/helpers";
 import KeyboardEvent from "utils/keyboardEvent";
 import Url from "utils/Url";
-import constants from "./constants";
+import config from "./config";
+import quickToolsAdapters from "./quickToolsAdapter";
+import webview from "./webview";
 
-export default class Acode {
+class Acode {
 	#modules = {};
 	#pluginsInit = {};
 	#pluginUnmount = {};
@@ -261,9 +276,10 @@ export default class Acode {
 		// Preferred CodeMirror language registration API for plugins
 		const editorLanguages = {
 			// name: string, extensions: string|Array<string>, caption?: string,
-			// loader?: () => Extension | Promise<Extension>
-			register: (name, extensions, caption, loader) =>
-				addMode(name, extensions, caption, loader),
+			// loader?: () => Extension | Promise<Extension>,
+			// options?: { aliases?, filenameMatchers?, formatAs? }
+			register: (name, extensions, caption, loader, options) =>
+				addMode(name, extensions, caption, loader, options),
 			unregister: (name) => removeMode(name),
 			add: (name, extensions, caption, loader) =>
 				addMode(name, extensions, caption, loader),
@@ -311,17 +327,62 @@ export default class Acode {
 			},
 		};
 
+		const codeHighlightModule = Object.freeze({
+			highlightLine,
+			highlightCodeBlock,
+			highlight: highlightCodeBlock,
+			clearCache: clearHighlightCache,
+			applyStyles: applyHighlightStyles,
+			getStyles: getHighlightStyles,
+			getStyleSheet: getHighlightStyleSheet,
+			HIGHLIGHT_CLASS,
+		});
+
 		const codemirrorModule = Object.freeze({
 			autocomplete: cmAutocomplete,
 			commands: cmCommands,
 			language: cmLanguage,
-			lezer: lezerHighlight,
+			lezer: Object.freeze({
+				...lezerHighlight,
+				common: lezerCommon,
+				highlight: lezerHighlight,
+				lr: lezerLR,
+			}),
 			lint: cmLint,
 			search: cmSearch,
 			state: cmState,
 			view: cmView,
+			highlight: codeHighlightModule,
 		});
 
+		const configProxy = new Proxy(config, {
+			set(target, prop, value, receiver) {
+				console.warn(
+					`[Security Alert] Attempt to modify read-only config property '${String(prop)}' blocked.`,
+				);
+				return true;
+			},
+			defineProperty(target, prop, descriptor) {
+				console.warn(
+					`[Security Alert] Attempt to define property '${String(prop)}' on read-only config blocked.`,
+				);
+				return true;
+			},
+			deleteProperty(target, prop) {
+				console.warn(
+					`[Security Alert] Attempt to delete property '${String(prop)}' on read-only config blocked.`,
+				);
+				return true;
+			},
+			setPrototypeOf(target, prototype) {
+				console.warn(
+					`[Security Alert] Attempt to change prototype of read-only config blocked.`,
+				);
+				return true;
+			},
+		});
+
+		this.define("config", configProxy);
 		this.define("Url", Url);
 		this.define("page", Page);
 		this.define("Color", Color);
@@ -330,10 +391,24 @@ export default class Acode {
 		this.define("alert", alert);
 		this.define("select", select);
 		this.define("loader", loader);
-		this.define("dialogBox", box);
+		this.define("dialogBox", dialog);
 		this.define("prompt", prompt);
 		this.define("intent", intent);
-		this.define("fileList", files);
+		let didWarnAboutFileList = false;
+		const deprecatedFileList = (...args) => {
+			if (!didWarnAboutFileList) {
+				didWarnAboutFileList = true;
+				console.warn(
+					'acode.require("fileList") is deprecated. Use the asynchronous "fileIndex" API. fileList now contains only non-native storage providers.',
+				);
+			}
+			return files(...args);
+		};
+		Object.assign(deprecatedFileList, files);
+		deprecatedFileList.deprecated = true;
+		deprecatedFileList.replacement = "fileIndex";
+		this.define("fileList", deprecatedFileList);
+		this.define("fileIndex", fileIndex);
 		this.define("fs", fsOperation);
 		this.define("confirm", confirm);
 		this.define("helpers", helpers);
@@ -364,7 +439,11 @@ export default class Acode {
 		this.define("selectionMenu", selectionMenu);
 		this.define("sidebarApps", sidebarAppsModule);
 		this.define("terminal", terminalModule);
+		this.define("webview", webview);
+		this.define("orientation", orientation);
+		this.define("fullscreen", fullscreen);
 		this.define("codemirror", codemirrorModule);
+		this.define("codeHighlight", codeHighlightModule);
 		this.define("@codemirror/autocomplete", cmAutocomplete);
 		this.define("@codemirror/commands", cmCommands);
 		this.define("@codemirror/language", cmLanguage);
@@ -372,7 +451,9 @@ export default class Acode {
 		this.define("@codemirror/search", cmSearch);
 		this.define("@codemirror/state", cmState);
 		this.define("@codemirror/view", cmView);
+		this.define("@lezer/common", lezerCommon);
 		this.define("@lezer/highlight", lezerHighlight);
+		this.define("@lezer/lr", lezerLR);
 		this.define("createKeyboardEvent", KeyboardEvent);
 		this.define("toInternalUrl", helpers.toInternalUri);
 		this.define("commands", this.#createCommandApi());
@@ -485,6 +566,8 @@ export default class Acode {
 	}
 
 	require(module) {
+		if (module.toLowerCase() === "fileicons")
+			return fileIcons.getPluginApi(document.currentScript);
 		return this.#modules[module.toLowerCase()];
 	}
 
@@ -522,10 +605,7 @@ export default class Acode {
 
 						let purchaseToken;
 						let product;
-						const pluginUrl = Url.join(
-							constants.API_BASE,
-							`plugin/${pluginId}`,
-						);
+						const pluginUrl = Url.join(config.API_BASE, `plugin/${pluginId}`);
 						fsOperation(pluginUrl)
 							.readFile("json")
 							.catch(() => {
@@ -549,20 +629,25 @@ export default class Acode {
 
 											if (isPaid && !purchaseToken) {
 												if (!product) throw new Error("Product not found");
-												return helpers.checkAPIStatus().then((apiStatus) => {
-													if (!apiStatus) {
-														alert(strings.error, strings.api_error);
-														return;
-													}
+												return helpers
+													.checkAPIStatus()
+													.then(async (apiStatus) => {
+														if (!apiStatus) {
+															alert(strings.error, strings.api_error);
+															return;
+														}
 
-													iap.setPurchaseUpdatedListener(
-														...purchaseListener(onpurchase, onerror),
-													);
-													return helpers.promisify(
-														iap.purchase,
-														product.productId,
-													);
-												});
+														const { default: purchaseListener } = await import(
+															/* webpackChunkName: "purchaseHandler" */ "handlers/purchase"
+														);
+														iap.setPurchaseUpdatedListener(
+															...purchaseListener(onpurchase, onerror),
+														);
+														return helpers.promisify(
+															iap.purchase,
+															product.productId,
+														);
+													});
 											}
 										})
 										.then(() => {
@@ -581,16 +666,17 @@ export default class Acode {
 
 									async function onpurchase(e) {
 										const purchase = await getPurchase(product.productId);
-										await ajax.post(
-											Url.join(constants.API_BASE, "plugin/order"),
-											{
-												data: {
-													id: remotePlugin.id,
-													token: purchase?.purchaseToken,
-													package: BuildInfo.packageName,
-												},
+										await fetch(Url.join(config.API_BASE, "plugin/order"), {
+											method: "POST",
+											headers: {
+												"Content-Type": "application/json",
 											},
-										);
+											body: JSON.stringify({
+												id: remotePlugin.id,
+												token: purchase?.purchaseToken,
+												package: BuildInfo.packageName,
+											}),
+										});
 										purchaseToken = purchase?.purchaseToken;
 									}
 
@@ -645,7 +731,7 @@ export default class Acode {
 	}
 
 	get exitAppMessage() {
-		const numFiles = editorManager.hasUnsavedFiles();
+		const numFiles = editorManager?.hasUnsavedFiles?.() ?? 0;
 		if (numFiles) {
 			return strings["unsaved files close app"];
 		}
@@ -699,11 +785,20 @@ export default class Acode {
 
 	unmountPlugin(id) {
 		if (id in this.#pluginUnmount) {
-			this.#pluginUnmount[id]();
+			try {
+				this.#pluginUnmount[id]();
+			} catch (err) {
+				console.group(
+					`Error while calling unmount callback for plugin "${id}"`,
+				);
+				console.error(err);
+				console.groupEnd();
+			}
 			fsOperation(Url.join(CACHE_STORAGE, id)).delete();
 		}
 
 		delete appSettings.uiSettings[`plugin-${id}`];
+		fileIcons.unregisterByPlugin(id);
 	}
 
 	registerFormatter(id, extensions, format, displayName) {
@@ -751,7 +846,9 @@ export default class Acode {
 		}
 		const modeName = resolvedMode || "text";
 		const formatterMap = appSettings.value.formatter || {};
-		const formatterId = formatterMap[modeName];
+		const formatAs = getFormatAsMode(modeName);
+		const formatterId =
+			formatterMap[modeName] ?? (formatAs && formatterMap[formatAs]);
 		const formatter = this.#formatter.find(({ id }) => id === formatterId);
 
 		if (!formatter) {
@@ -761,6 +858,9 @@ export default class Acode {
 			}
 
 			if (selectIfNull) {
+				const { default: formatterSettings } = await import(
+					/* webpackChunkName: "formatterSettings" */ "settings/formatterSettings"
+				);
 				formatterSettings(modeName);
 				this.#afterSelectFormatter(modeName);
 			} else {
@@ -903,21 +1003,18 @@ export default class Acode {
 	 * @param {string} message Message body of the notification
 	 * @param {Object} options Notification options
 	 * @param {string} [options.icon] Icon for the notification, can be a URL or a base64 encoded image or icon class or svg string
-	 * @param {boolean} [options.autoClose=true] Whether notification should auto close
 	 * @param {Function} [options.action=null] Action callback when notification is clicked
 	 * @param {('info'|'warning'|'error'|'success')} [options.type='info'] Type of notification
 	 */
 	pushNotification(
 		title,
 		message,
-		{ icon, autoClose = true, action = null, type = "info" } = {},
+		{ icon, action = null, type = "info" } = {},
 	) {
-		const nm = new NotificationManager();
-		nm.pushNotification({
+		notificationManager.pushNotification({
 			title,
 			message,
 			icon,
-			autoClose,
 			action,
 			type,
 		});
@@ -946,6 +1043,11 @@ export default class Acode {
 		const command = registerExternalCommand(descriptor);
 		this.#refreshCommandBindings();
 		return command;
+	}
+
+	/** Register input, selection and availability handlers for one custom tab. */
+	registerQuickToolsAdapter(tab, adapter) {
+		return quickToolsAdapters.register(tab, adapter);
 	}
 
 	removeCommand(name) {
@@ -1000,3 +1102,6 @@ export default class Acode {
 		};
 	}
 }
+
+const acode = new Acode();
+export default acode;

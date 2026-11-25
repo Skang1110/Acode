@@ -1,8 +1,8 @@
 import lspStatusBar from "components/lspStatusBar";
 import toast from "components/toast";
-import alert from "dialogs/alert";
 import confirm from "dialogs/confirm";
 import loader from "dialogs/loader";
+import notificationManager from "lib/notificationManager";
 import { buildShellArchCase } from "./installerUtils";
 import {
 	formatCommand,
@@ -10,9 +10,14 @@ import {
 	runForegroundCommand,
 	runQuickCommand,
 } from "./installRuntime";
+import { addLspLog } from "./logs";
+import {
+	buildAxsBridgeCommand,
+	checkAxsBridgeStatus,
+	checkServerAliveViaWebSocket,
+} from "./runtimes/axsBridge";
 import { getServerBundle } from "./serverCatalog";
 import type {
-	BridgeConfig,
 	InstallCheckResult,
 	InstallStatus,
 	LauncherConfig,
@@ -33,7 +38,16 @@ const STATUS_PRESENT: InstallStatus = "present";
 const STATUS_DECLINED: InstallStatus = "declined";
 const STATUS_FAILED: InstallStatus = "failed";
 
-const AXS_BINARY = "$PREFIX/axs";
+const DONT_ASK_TERMINAL_REQUIRED_FOR_LSP = "dontAskTerminalRequiredForLsp";
+
+// PRoot prints `can't sanitize binding "/proc/self/fd/N"` when one of the
+// session's stdio descriptors is a pipe/socket and therefore cannot be
+// canonicalized (see init-sandbox.sh).  Drop only that known, harmless message
+// so genuine proot warnings are still surfaced in the LSP log.
+const PROOT_FD_BINDING_WARNING =
+	/can'?t sanitize binding "\/proc\/self\/fd(?:\/[012])?"/i;
+
+let alreadyInformed = false;
 
 function getTerminalRequiredMessage(): string {
 	return (
@@ -161,7 +175,7 @@ async function readPortFromFile(filePath: string): Promise<number | null> {
 
 /**
  * Get the port for a running LSP server from the axs port file.
- * @param serverName - The LSP server binary name (e.g., "typescript-language-server")
+ * @param serverName - The LSP server binary name (e.g., "pylsp")
  * @param session - Session ID for port file naming
  */
 export async function getLspPort(
@@ -245,44 +259,6 @@ async function waitForPort(
 }
 
 /**
- * Quick check if a server is running and connectable.
- * Attempts a fast WebSocket connection test.
- */
-async function checkServerAlive(url: string, timeout = 1000): Promise<boolean> {
-	return new Promise((resolve) => {
-		try {
-			const ws = new WebSocket(url);
-			const timer = setTimeout(() => {
-				try {
-					ws.close();
-				} catch {}
-				resolve(false);
-			}, timeout);
-
-			ws.onopen = () => {
-				clearTimeout(timer);
-				try {
-					ws.close();
-				} catch {}
-				resolve(true);
-			};
-
-			ws.onerror = () => {
-				clearTimeout(timer);
-				resolve(false);
-			};
-
-			ws.onclose = () => {
-				clearTimeout(timer);
-				resolve(false);
-			};
-		} catch {
-			resolve(false);
-		}
-	});
-}
-
-/**
  * Check if we can reuse an existing server by testing the port.
  * Returns the port number if the server is alive, null otherwise.
  */
@@ -303,9 +279,18 @@ export async function canReuseExistingServer(
 	}
 
 	const url = `ws://127.0.0.1:${portInfo.port}/`;
-	const alive = await checkServerAlive(url, 1000);
+	const status = await checkAxsBridgeStatus(url, 1000);
+	const alive =
+		status === "alive" ||
+		(status === "unsupported" &&
+			(await checkServerAliveViaWebSocket(url, 1000)));
 
 	if (alive) {
+		addLspLog(
+			server.id,
+			"info",
+			`Reusing existing server on port ${portInfo.port}`,
+		);
 		console.info(
 			`[LSP:${server.id}] Reusing existing server on port ${portInfo.port}`,
 		);
@@ -315,50 +300,8 @@ export async function canReuseExistingServer(
 	console.info(
 		`[LSP:${server.id}] Found stale port file, will start new server`,
 	);
+	addLspLog(server.id, "warn", "Found stale port file, starting a new server");
 	return null;
-}
-
-function buildAxsBridgeCommand(
-	bridge: BridgeConfig | undefined,
-	commandOverride?: string | null,
-	session?: string,
-): string | null {
-	if (!bridge || bridge.kind !== "axs") return null;
-
-	const binary =
-		commandOverride || bridge.command
-			? String(commandOverride || bridge.command)
-			: (() => {
-					throw new Error("Bridge requires a command to execute");
-				})();
-	const args: string[] = Array.isArray(bridge.args)
-		? bridge.args.map((arg) => String(arg))
-		: [];
-
-	// Use session ID or bridge session or server command as fallback session
-	const effectiveSession = session || bridge.session || binary;
-
-	const parts = [AXS_BINARY, "lsp"];
-
-	// Add --session flag for port file naming
-	parts.push("--session", quoteArg(effectiveSession));
-
-	// Only add --port if explicitly specified
-	if (
-		typeof bridge.port === "number" &&
-		bridge.port > 0 &&
-		bridge.port <= 65535
-	) {
-		parts.push("--port", String(bridge.port));
-	}
-
-	parts.push(quoteArg(binary));
-
-	if (args.length) {
-		parts.push("--");
-		args.forEach((arg) => parts.push(quoteArg(arg)));
-	}
-	return parts.join(" ");
 }
 
 function resolveStartCommand(
@@ -794,7 +737,7 @@ export async function installServer(
 		return bundle.installServer(server.id, server, mode, options);
 	}
 
-	const { promptConfirm = true } = options;
+	const { promptConfirm = false } = options;
 	const cacheKey = getInstallCacheKey(server);
 	const displayLabel = getInstallLabel(server);
 	const isUpdate = mode === "update";
@@ -811,25 +754,46 @@ export async function installServer(
 	}
 
 	if (promptConfirm) {
-		const shouldContinue = await confirm(
-			displayLabel,
-			`${actionLabel} ${displayLabel} language server?`,
-		);
-		if (!shouldContinue) {
-			if (cacheKey) {
-				checkedCommands.set(cacheKey, STATUS_DECLINED);
-			}
-			return false;
-		}
+		let resolveThis: (val: boolean) => void;
+		let rejectThis: (err: Error) => void;
+		notificationManager.pushNotification({
+			icon: "zap",
+			title: displayLabel,
+			message: strings["lsp-install-notification"].replace(
+				"{server}",
+				displayLabel,
+			),
+			type: "warning",
+			action: async (notification) => {
+				notificationManager.closeNotification(notification);
+				try {
+					resolveThis(await installServer(server, mode));
+				} catch (error) {
+					rejectThis(error as Error);
+				}
+			},
+			onDismiss: () => {
+				resolveThis(false);
+				if (cacheKey) {
+					checkedCommands.set(cacheKey, STATUS_DECLINED);
+				}
+			},
+		});
+
+		return new Promise((resolve, reject) => {
+			resolveThis = resolve;
+			rejectThis = reject;
+		});
 	}
 
-	let loadingDialog: LoaderDialog | null = null;
+	let loading = true;
 	try {
-		loadingDialog = loader.create(
-			displayLabel,
-			`${actionLabel}ing ${displayLabel}...`,
-		);
-		loadingDialog.show();
+		notificationManager.pushNotification({
+			icon: "zap",
+			loading: () => loading,
+			title: displayLabel,
+			message: `${isUpdate ? "Updating" : "Installing"} ${displayLabel}...`,
+		});
 		await runForegroundCommand(command);
 		resetInstallState(server.id);
 
@@ -852,7 +816,7 @@ export async function installServer(
 		toast(strings?.error ?? "Error");
 		throw error;
 	} finally {
-		loadingDialog?.destroy?.();
+		loading = false;
 	}
 }
 
@@ -865,7 +829,7 @@ export async function uninstallServer(
 		return bundle.uninstallServer(server.id, server, options);
 	}
 
-	const { promptConfirm = true } = options;
+	const { promptConfirm = false } = options;
 	const cacheKey = getInstallCacheKey(server);
 	const displayLabel = getInstallLabel(server);
 	const command = getUninstallCommand(server);
@@ -875,23 +839,32 @@ export async function uninstallServer(
 	}
 
 	if (promptConfirm) {
-		const shouldContinue = await confirm(
-			displayLabel,
-			`Uninstall ${displayLabel} language server?`,
-		);
-		if (!shouldContinue) {
-			return false;
-		}
+		notificationManager.pushNotification({
+			icon: "zap",
+			title: displayLabel,
+			message: strings["lsp-uninstall-notification"].replace(
+				"{server}",
+				displayLabel,
+			),
+			type: "warning",
+			action: (notification) => {
+				uninstallServer(server, { promptConfirm: false });
+				notificationManager.closeNotification(notification);
+			},
+		});
+		return false;
 	}
 
-	let loadingDialog: LoaderDialog | null = null;
+	let loading = true;
 	try {
-		loadingDialog = loader.create(
-			displayLabel,
-			`Uninstalling ${displayLabel}...`,
-		);
-		loadingDialog.show();
-		await runForegroundCommand(command);
+		notificationManager.pushNotification({
+			icon: "zap",
+			title: displayLabel,
+			message: `Uninstalling ${displayLabel}...`,
+			loading: () => loading,
+		});
+		//await runForegroundCommand(command);
+		await runQuickCommand(command);
 		if (cacheKey) {
 			checkedCommands.delete(cacheKey);
 		}
@@ -903,7 +876,7 @@ export async function uninstallServer(
 		toast(strings?.error ?? "Error");
 		throw error;
 	} finally {
-		loadingDialog?.destroy();
+		loading = false;
 	}
 }
 
@@ -945,21 +918,39 @@ async function performInstallCheck(
 async function startInteractiveServer(
 	command: string,
 	serverId: string,
+	logOutput: LauncherConfig["logOutput"] = "all",
 ): Promise<string> {
 	const executor = getExecutor();
 	const callback: ExecutorCallback = (type, data) => {
+		if (type === "stderr" && PROOT_FD_BINDING_WARNING.test(data)) return;
+		if (type === "stdout" && /listening on/i.test(data)) {
+			signalServerReady(serverId);
+		}
+
+		if (logOutput === "warnings-and-errors") {
+			const level = /\b(error|failed|failure|fatal|panic)\b/i.test(data)
+				? "error"
+				: /\b(warn(?:ing)?|unknown method|disabled|not supported|lacks)\b/i.test(
+							data,
+						)
+					? "warn"
+					: null;
+			if (!level) return;
+			addLspLog(serverId, level, data);
+			console[level](`[LSP:${serverId}] ${data}`);
+			return;
+		}
+
 		if (type === "stderr") {
-			if (/proot warning/i.test(data)) return;
+			addLspLog(serverId, "stderr", data);
 			console.warn(`[LSP:${serverId}] ${data}`);
 		} else if (type === "stdout" && data && data.trim()) {
+			addLspLog(serverId, "info", data);
 			console.info(`[LSP:${serverId}] ${data}`);
-			// Detect when the axs proxy signals it's listening
-			if (/listening on/i.test(data)) {
-				signalServerReady(serverId);
-			}
 		}
 	};
 	const uuid = await executor.start(command, callback, true);
+	addLspLog(serverId, "info", `Started shell process ${uuid}`);
 	managedServers.set(serverId, {
 		uuid,
 		command,
@@ -1081,7 +1072,26 @@ export async function ensureServerRunning(
 	} catch {}
 	if (!isTerminalInstalled) {
 		const message = getTerminalRequiredMessage();
-		alert(strings?.error, message);
+
+		if (!localStorage.getItem(DONT_ASK_TERMINAL_REQUIRED_FOR_LSP)) {
+			if (!alreadyInformed) {
+				const response = await confirm(strings?.error, message, false, {
+					checkboxText: strings["don't ask again"],
+					returnState: true,
+				});
+				if (
+					typeof response === "object" &&
+					response.confirmed &&
+					response.checked
+				) {
+					localStorage.setItem(DONT_ASK_TERMINAL_REQUIRED_FOR_LSP, "true");
+				}
+				alreadyInformed = true;
+			} else {
+				toast(message);
+			}
+		}
+
 		const unavailable: LspError = new Error(message);
 		unavailable.code = "LSP_SERVER_UNAVAILABLE";
 		throw unavailable;
@@ -1120,7 +1130,7 @@ export async function ensureServerRunning(
 	}
 
 	try {
-		const uuid = await startInteractiveServer(command, key);
+		const uuid = await startInteractiveServer(command, key, launcher.logOutput);
 
 		// For auto-port discovery, wait for server ready signal then read port
 		let discoveredPort: number | undefined;
@@ -1137,6 +1147,7 @@ export async function ensureServerRunning(
 				console.info(
 					`[LSP:${server.id}] Auto-discovered port ${discoveredPort}`,
 				);
+				addLspLog(server.id, "info", `Auto-discovered port ${discoveredPort}`);
 				// Update managed server entry with the port
 				const entry = managedServers.get(key);
 				if (entry) {
@@ -1159,12 +1170,14 @@ export async function ensureServerRunning(
 
 		if (!announcedServers.has(key)) {
 			console.info(`[LSP:${server.id}] ${server.label} connected`);
+			addLspLog(server.id, "info", `${server.label} connected`);
 			announcedServers.add(key);
 		}
 		return { uuid, discoveredPort };
 	} catch (error) {
 		console.error(`Failed to start language server ${server.id}`, error);
 		const errorMessage = error instanceof Error ? error.message : String(error);
+		addLspLog(server.id, "error", errorMessage || "Connection failed");
 		lspStatusBar.show({
 			message: errorMessage || "Connection failed",
 			title: `${server.label} failed`,
@@ -1195,6 +1208,7 @@ export async function ensureServerRunning(
 export function stopManagedServer(serverId: string): void {
 	const entry = managedServers.get(serverId);
 	if (!entry) return;
+	addLspLog(serverId, "info", "Stopping managed server");
 	const executor = getExecutor();
 	executor.stop(entry.uuid).catch((error: Error) => {
 		console.warn(`Failed to stop language server ${serverId}`, error);

@@ -27,6 +27,15 @@ module.exports = {
   setExec: function (path, executable, success, error) {
     cordova.exec(success, error, 'System', 'setExec', [path, String(executable)]);
   },
+  getInstaller: function (success, error) {
+    cordova.exec(success, error, 'System', 'getInstaller', []);
+  },
+  shareText: function (text, success, error) {
+    cordova.exec(success, error, 'System', 'shareText', [text]);
+  },
+  getNativeLibraryPath: function (success, error) {
+    cordova.exec(success, error, 'System', 'getNativeLibraryPath', []);
+  },
 
 
   getNativeLibraryPath: function (success, error) {
@@ -41,6 +50,9 @@ module.exports = {
   },
   redeemReward: function (offerId, success, error) {
     cordova.exec(success, error, 'System', 'redeemReward', [offerId]);
+  },
+  extractAsset: function (assetName, destinationPath, success, error) {
+    cordova.exec(success, error, 'System', 'extractAsset', [assetName, destinationPath]);
   },
 
   getParentPath: function (path, success, error) {
@@ -136,7 +148,7 @@ module.exports = {
    * @param {(error: any) => void} [onFail] - Callback invoked if launching the activity fails.
    *
    * @example
-   * System.launchApp(
+   * system.launchApp(
    *   "com.example.app",
    *   "com.example.app.MainActivity",
    *   {
@@ -150,6 +162,97 @@ module.exports = {
    */
   launchApp: function (app, className, extras, onSuccess, onFail) {
     cordova.exec(onSuccess, onFail, 'System', 'launch-app', [app, className, extras]);
+  },
+  /**
+   * Launch an activity and hand it content URIs for one or more files.
+   *
+   * Combines `launchApp` and `fileAction`, and is more flexible than either:
+   * name the exact activity, name only the package and let the best matching
+   * activity be resolved, or omit both and let the system pick a handler.
+   * Files are handed over as `content://` URIs the target may read. Sources are
+   * `file://` paths (exposed through the app's FileProvider) or existing
+   * `content://` URIs, which are passed through unchanged and re-granted, so
+   * they stay readable only while this app still holds access to them.
+   *
+   * When `app` is given, that package is granted access. When it is omitted the
+   * intent's flag and ClipData carry the grant, so only the app that actually
+   * receives the files gets access, not every app that could handle them. With
+   * several files and no `mimeType`, the type the whole set shares is used.
+   *
+   * The default action follows what the call needs:
+   * - one file -> `VIEW`
+   * - several files -> `SEND_MULTIPLE`
+   * - no file -> `MAIN` (a plain app launch)
+   *
+   * @param {LaunchAppWithFileOptions} options - Target, files and intent details.
+   * @param {(result: LaunchAppWithFileResult) => void} [onSuccess] - Receives the content URIs and the resolved component.
+   * @param {(error: any) => void} [onFail] - Callback invoked if nothing could be launched.
+   *
+   * @example <caption>Run a .love file in love-android</caption>
+   * system.launchAppWithFile({
+   *   app: "org.love2d.android",
+   *   className: "org.love2d.android.GameActivity",
+   *   fileUri: "file:///storage/emulated/0/Games/mygame.love",
+   *   mimeType: "application/zip"
+   * }, (result) => {
+   *   console.log("handed", result.uris, "to", result.component);
+   * }, (error) => {
+   *   console.error("could not launch love-android", error);
+   * });
+   *
+   * @example <caption>Let the system choose the app</caption>
+   * system.launchAppWithFile({
+   *   fileUri: "file:///storage/emulated/0/Documents/report.pdf"
+   * });
+   *
+   * @example <caption>Several files, custom flags</caption>
+   * system.launchAppWithFile({
+   *   app: "com.example.app",
+   *   fileUris: ["file:///a.png", "file:///b.png"],
+   *   mimeType: "image/png",
+   *   flags: ["SINGLE_TOP"]
+   * });
+   */
+  launchAppWithFile: function (options, onSuccess, onFail) {
+    if (typeof onSuccess !== 'function') onSuccess = function () { };
+    if (typeof onFail !== 'function') onFail = function () { };
+
+    if (!options || typeof options !== 'object') {
+      onFail('system.launchAppWithFile: an options object is required.');
+      return;
+    }
+
+    var app = trimmedString(options.app);
+    var className = trimmedString(options.className);
+    var fileUri = trimmedString(options.fileUri);
+    var fileUris = toUriList(options.fileUris);
+
+    if (className && !app) {
+      onFail('system.launchAppWithFile: "className" requires "app" (the package name).');
+      return;
+    }
+
+    if (!app && !fileUri && fileUris.length === 0) {
+      onFail('system.launchAppWithFile: nothing to launch, provide "app" and/or a file.');
+      return;
+    }
+
+    cordova.exec(onSuccess, onFail, 'System', 'launch-app-with-file', [{
+      app: app,
+      className: className,
+      fileUri: fileUri,
+      fileUris: fileUris,
+      filename: trimmedString(options.filename),
+      clipLabel: trimmedString(options.clipLabel),
+      mimeType: trimmedString(options.mimeType),
+      action: trimmedString(options.action),
+      categories: toNameList(options.categories),
+      flags: Array.isArray(options.flags) ? options.flags : [],
+      extras: options.extras && typeof options.extras === 'object' ? options.extras : null,
+      writeAccess: !!options.writeAccess,
+      attachAsStream: !!options.attachAsStream,
+      newTask: options.newTask === undefined ? true : !!options.newTask
+    }]);
   },
   inAppBrowser: function (url, title, showButtons, disableCache) {
     var myInAppBrowser = {
@@ -216,8 +319,17 @@ module.exports = {
       onFail,
       'System',
       'set-native-context-menu-disabled',
-      [String(!!disabled)],
+      [String(!!disabled)]
     );
+  },
+  /**
+   * Change the app icon at runtime.
+   * @param iconName Icon id, e.g. "midnight_circuit", or "default" to restore the original icon
+   * @param onSuccess
+   * @param onFail
+   */
+  setAppIcon: function (iconName, onSuccess, onFail) {
+    cordova.exec(onSuccess, onFail, 'System', 'set-app-icon', [iconName]);
   },
   getGlobalSetting: function (key, onSuccess, onFail) {
     cordova.exec(onSuccess, onFail, 'System', 'get-global-setting', [key]);
@@ -260,5 +372,256 @@ module.exports = {
         [text1, text2]
       );
     });
+  },
+  /**
+   * Make an HTTP request and receive the response body as a WHATWG
+   * `ReadableStream` of `Uint8Array` chunks, as bytes arrive from the server.
+   *
+   * The native layer does not buffer the whole response and performs no SSE /
+   * provider specific parsing; it simply forwards raw byte chunks. Chunk
+   * boundaries are arbitrary and may split multi-byte UTF-8 characters or SSE
+   * frames. The consumer is responsible for decoding / parsing the stream.
+   *
+   * @param {string} url - Request URL
+   * @param {Object} [options]
+   * @param {string} [options.method="GET"] - HTTP method
+   * @param {Object<string,string>} [options.headers] - Request headers
+   * @param {string} [options.body] - Request body. Sent as UTF-8 text unless
+   *   `bodyIsBase64` is set, in which case it is decoded from base64.
+   * @param {boolean} [options.bodyIsBase64=false]
+   * @param {boolean} [options.followRedirects=true]
+   * @param {number} [options.connectTimeout=30000] - Connect timeout in ms
+   * @param {number} [options.readTimeout=0] - Read timeout in ms (0 = none)
+   * @param {number} [options.chunkSize=32768] - Requested native chunk size in bytes
+   * @param {AbortSignal} [options.signal] - When aborted, the underlying native
+   *   request is cancelled. If the headers have not yet arrived the returned
+   *   promise rejects with an `AbortError`; otherwise the response stream is
+   *   errored with an `AbortError`.
+   * @returns {Promise<Response>} Resolves with a `Response` whose `body` is a
+   *   `ReadableStream` delivering `Uint8Array` chunks. A 4xx/5xx HTTP status
+   *   is a normal response (not a rejected promise); only transport failures
+   *   reject. Cancelling the returned stream's reader (or aborting
+   *   `options.signal`) cancels the underlying native HTTP request.
+   */
+  httpStream: function (url, options) {
+    options = options || {};
+    var signal = options.signal || null;
+
+    var nativeOptions = {};
+    for (var key in options) {
+      if (key !== 'signal') nativeOptions[key] = options[key];
+    }
+
+    return new Promise(function (resolve, reject) {
+      var requestId = "httpStream_" + Date.now() + "_" + Math.random().toString(36).slice(2, 10);
+      var HIGH_WATER_MARK = 65536;
+      var controller = null;
+      var headersReceived = false;
+      var started = false;
+      var cancelSent = false;
+      var terminal = false;
+      var receivedBytes = 0;
+      var ackedBytes = 0;
+
+      function sendCancel() {
+        if (cancelSent) return;
+        cancelSent = true;
+        cordova.exec(null, null, 'System', 'http-stream-cancel', [requestId]);
+      }
+
+      function teardownSignal() {
+        if (signal) {
+          try {
+            signal.removeEventListener('abort', onAbort);
+          } catch (e) {}
+        }
+      }
+
+      function finish() {
+        terminal = true;
+        teardownSignal();
+      }
+
+      function fail(err) {
+        if (terminal) return;
+        finish();
+        if (headersReceived && controller) {
+          controller.error(err);
+        } else {
+          reject(err);
+        }
+      }
+
+      function onAbort() {
+        if (terminal) return;
+        if (started) sendCancel();
+        var err = new Error('The http stream was aborted');
+        err.name = 'AbortError';
+        fail(err);
+      }
+
+      function ackConsumed() {
+        if (terminal || !controller) return;
+        var desired = controller.desiredSize;
+        if (desired === null) return;
+        var buffered = Math.max(0, HIGH_WATER_MARK - desired);
+        var consumed = receivedBytes - buffered;
+        var delta = consumed - ackedBytes;
+        if (delta > 0) {
+          ackedBytes = consumed;
+          cordova.exec(null, null, 'System', 'http-stream-ack', [requestId, delta]);
+        }
+      }
+
+      function headersFromPairs(pairs) {
+        var h = new Headers();
+        if (!pairs) return h;
+        if (!Array.isArray(pairs)) {
+          for (var name in pairs) {
+            try {
+              h.append(name, pairs[name]);
+            } catch (e) {}
+          }
+          return h;
+        }
+        for (var i = 0; i < pairs.length; i++) {
+          var pair = pairs[i];
+          if (!pair || pair.length < 2) continue;
+          try {
+            h.append(pair[0], pair[1]);
+          } catch (e) {}
+        }
+        return h;
+      }
+
+      var stream = new ReadableStream({
+        start: function (c) {
+          controller = c;
+        },
+        pull: function () {
+          ackConsumed();
+        },
+        cancel: function () {
+          finish();
+          if (started) sendCancel();
+        }
+      }, {
+        highWaterMark: HIGH_WATER_MARK,
+        size: function (chunk) {
+          return chunk.byteLength;
+        }
+      });
+
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+        } else {
+          signal.addEventListener('abort', onAbort);
+        }
+      }
+      if (terminal) return;
+
+      started = true;
+      cordova.exec(
+        function (event) {
+          if (!event || typeof event !== 'object' || terminal) return;
+
+          switch (event.type) {
+            case 'headers': {
+              headersReceived = true;
+              var status = event.status;
+              var cannotHaveBody = status === 204 || status === 205 || status === 304;
+              var headers = headersFromPairs(event.headers || []);
+              var response;
+              if (cannotHaveBody) {
+                response = new Response(null, {
+                  status: status,
+                  statusText: event.statusText || '',
+                  headers: headers
+                });
+              } else {
+                response = new Response(stream, {
+                  status: status,
+                  statusText: event.statusText || '',
+                  headers: headers
+                });
+              }
+              if (event.url) {
+                Object.defineProperty(response, 'url', { value: event.url, configurable: true });
+              }
+              resolve(response);
+              break;
+            }
+            case 'data': {
+              if (controller && event.chunk) {
+                var bytes = event.b64
+                  ? base64ToBytes(event.chunk)
+                  : latin1ToBytes(event.chunk);
+                controller.enqueue(bytes);
+                receivedBytes += bytes.byteLength;
+              }
+              break;
+            }
+            case 'complete': {
+              finish();
+              if (controller) controller.close();
+              break;
+            }
+            case 'error': {
+              fail(new Error(event.message || 'Stream failed'));
+              break;
+            }
+          }
+        },
+        function (err) {
+          fail(typeof err === 'string' ? new Error(err) : err);
+        },
+        'System',
+        'http-stream-start',
+        [requestId, url, nativeOptions]
+      );
+    });
   }
 };
+
+function base64ToBytes(base64) {
+  var binary = atob(base64);
+  var bytes = new Uint8Array(binary.length);
+  for (var i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function latin1ToBytes(text) {
+  var bytes = new Uint8Array(text.length);
+  for (var i = 0; i < text.length; i++) {
+    bytes[i] = text.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function trimmedString(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim();
+}
+
+function toUriList(value) {
+  if (!Array.isArray(value)) return [];
+  const uris = [];
+  for (const entry of value) {
+    const uri = trimmedString(entry);
+    if (uri && !uris.includes(uri)) uris.push(uri);
+  }
+  return uris;
+}
+
+function toNameList(value) {
+  if (!Array.isArray(value)) return [];
+  const names = [];
+  for (const entry of value) {
+    const name = trimmedString(entry);
+    if (name) names.push(name);
+  }
+  return names;
+}

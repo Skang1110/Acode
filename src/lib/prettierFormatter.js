@@ -1,5 +1,7 @@
 import fsOperation from "fileSystem";
 import { parse } from "acorn";
+import { getDocText } from "cm/editorUtils";
+import { getFormatAsMode } from "cm/modelist";
 import toast from "components/toast";
 import appSettings from "lib/settings";
 import prettierPluginBabel from "prettier/plugins/babel";
@@ -14,8 +16,6 @@ import prettier from "prettier/standalone";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
 
-const PRETTIER_ID = "prettier";
-const PRETTIER_NAME = "Prettier";
 const CONFIG_FILENAMES = [
 	".prettierrc",
 	".prettierrc.json",
@@ -72,61 +72,22 @@ const MODE_TO_PARSER = {
 	javascript: "babel",
 };
 
-const SUPPORTED_EXTENSIONS = [
-	"js",
-	"cjs",
-	"mjs",
-	"jsx",
-	"ts",
-	"tsx",
-	"json",
-	"json5",
-	"css",
-	"scss",
-	"less",
-	"html",
-	"htm",
-	"vue",
-	"md",
-	"markdown",
-	"mdx",
-	"yaml",
-	"yml",
-	"graphql",
-	"gql",
-];
-
-/**
- * Register Prettier formatter with Acode instance
- */
-export function registerPrettierFormatter() {
-	if (!window?.acode) return;
-	const alreadyRegistered = acode.formatters.some(
-		({ id }) => id === PRETTIER_ID,
-	);
-	if (alreadyRegistered) return;
-	acode.registerFormatter(
-		PRETTIER_ID,
-		SUPPORTED_EXTENSIONS,
-		() => formatActiveFileWithPrettier(),
-		PRETTIER_NAME,
-	);
-}
-
-async function formatActiveFileWithPrettier() {
+export async function formatActiveFileWithPrettier() {
 	const file = editorManager?.activeFile;
 	const editor = editorManager?.editor;
 	if (!file || file.type !== "editor" || !editor) return false;
 
 	const modeName = (file.currentMode || "text").toLowerCase();
-	const parser = getParserForMode(modeName);
+	const formatAs = getFormatAsMode(modeName);
+	const parser =
+		getParserForMode(modeName) || (formatAs && getParserForMode(formatAs));
 	if (!parser) {
 		toast("Prettier does not support this file type yet");
 		return false;
 	}
 
 	const doc = editor.state.doc;
-	const source = doc.toString();
+	const source = getDocText(doc);
 	const filepath = file.uri || file.filename || "";
 	try {
 		const config = await resolvePrettierConfig(file);

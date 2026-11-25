@@ -6,6 +6,7 @@ import Checkbox from "components/checkbox";
 import Contextmenu from "components/contextmenu";
 import Page from "components/page";
 import searchBar from "components/searchbar";
+import terminalManager from "components/terminal/terminalManager";
 import alert from "dialogs/alert";
 import confirm from "dialogs/confirm";
 import loader from "dialogs/loader";
@@ -14,17 +15,18 @@ import select from "dialogs/select";
 import JSZip from "jszip";
 import actionStack from "lib/actionStack";
 import checkFiles from "lib/checkFiles";
-import constants from "lib/constants";
+import config from "lib/config";
 import openFolder from "lib/openFolder";
 import projects from "lib/projects";
 import recents from "lib/recents";
 import remoteStorage from "lib/remoteStorage";
 import appSettings from "lib/settings";
-import { hideAd } from "lib/startAd";
+import { deleteSftpProfile, getSftpProfileId } from "lib/sftpProfiles";
 import mimeTypes from "mime-types";
 import mustache from "mustache";
 import filesSettings from "settings/filesSettings";
 import URLParse from "url-parse";
+import copyEntry from "utils/copyEntry";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
 import _addMenu from "./add-menu.hbs";
@@ -58,6 +60,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 
 	const IS_FOLDER_MODE = ["folder", "both"].includes(mode);
 	const IS_FILE_MODE = ["file", "both"].includes(mode);
+	const SELECT_DOCUMENT_LABEL = "Select document";
 	const storedState = helpers.parseJSON(localStorage.fileBrowserState) || [];
 	/**@type {Array<Location>} */
 	const state = [];
@@ -67,14 +70,14 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 	if (!Array.isArray(storageList)) storageList = [];
 
 	let isSelectionMode = false;
+	let isPasting = false;
 	let selectedItems = new Set();
+	let copiedItems = [];
 
-	if (!info) {
-		if (mode !== "both") {
-			info = IS_FOLDER_MODE ? strings["open folder"] : strings["open file"];
-		} else {
-			info = strings["file browser"];
-		}
+	// In "both" mode the page title already says "File browser", so the
+	// info row is only shown when the caller passes its own note.
+	if (!info && mode !== "both") {
+		info = IS_FOLDER_MODE ? strings["open folder"] : strings["open file"];
 	}
 
 	return new Promise((resolve, reject) => {
@@ -97,8 +100,21 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				data-action="toggle-selection-mode"
 			></span>
 		);
+		const $pasteToggler = (
+			<span className="icon paste" data-action="paste-selection"></span>
+		);
 
 		const $search = <span className="icon search" data-action="search"></span>;
+		const $selectDocument = (
+			<span
+				className="icon folder_open"
+				data-action="select-document"
+				title={SELECT_DOCUMENT_LABEL}
+				aria-label={SELECT_DOCUMENT_LABEL}
+				role="button"
+				tabindex="0"
+			></span>
+		);
 		const $lead = <span className="icon clearclose" data-action="close"></span>;
 		const $page = Page(strings["file browser"].capitalize(), {
 			lead: $lead,
@@ -130,6 +146,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 		const $selectionMenu = Contextmenu({
 			innerHTML: () => {
 				return `
+        <li action="copy">${strings.copy.capitalize(0)}</li>
         <li action="compress">${strings.compress.capitalize(0)}</li>
         <li action="delete">${strings.delete.capitalize(0)}</li>
         `;
@@ -150,8 +167,9 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 		});
 
 		$selectionMenuToggler.style.display = "none";
+		$pasteToggler.style.display = "none";
 		const progress = {};
-		let cachedDir = {};
+		let cachedDir = new Map();
 		let currentDir = {
 			url: null,
 			name: null,
@@ -169,8 +187,10 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 		$content.addEventListener("click", handleClick);
 		$content.addEventListener("contextmenu", handleContextMenu, true);
 		$page.body = $content;
+		$page.header.append($search);
+		if (IS_FILE_MODE) $page.header.append($selectDocument);
 		$page.header.append(
-			$search,
+			$pasteToggler,
 			$selectionModeToggler,
 			$addMenuToggler,
 			$menuToggler,
@@ -180,6 +200,8 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 		if (IS_FOLDER_MODE) {
 			$openFolder = tag("button", {
 				className: "floating icon check",
+				title: strings["select folder"],
+				ariaLabel: strings["select folder"],
 				style: {
 					bottom: "10px",
 					top: "auto",
@@ -211,6 +233,14 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			toggleSelectionMode(isSelectionMode);
 		};
 
+		$pasteToggler.onclick = pasteCopiedItems;
+		$selectDocument.onclick = selectDocument;
+		$selectDocument.onkeydown = (event) => {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			event.preventDefault();
+			selectDocument();
+		};
+
 		$fbMenu.onclick = function (e) {
 			$fbMenu.hide();
 			const action = e.target.getAttribute("action");
@@ -225,8 +255,6 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			}
 
 			if (action === "reload") {
-				const { url } = currentDir;
-				if (url in cachedDir) delete cachedDir[url];
 				reload();
 				return;
 			}
@@ -283,41 +311,163 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 
 					if (!zipFile) break;
 
+					let isCancelled = false;
 					const loadingLoader = loader.create(
 						strings["loading"],
 						"Importing zip file...",
-						{ timeout: 10000 },
+						{
+							timeout: 10000,
+							oncancel: () => {
+								isCancelled = true;
+							},
+						},
 					);
+
+					let zipName = Url.basename(zipFile).replace(/\.zip$/, "");
+					const targetDir = currentDir.url;
+					let extractDir = Url.join(targetDir, zipName);
 
 					try {
 						const zipContent = await fsOperation(zipFile).readFile();
 						const zip = await JSZip.loadAsync(zipContent);
-						const targetDir = currentDir.url;
-						const targetFs = fsOperation(targetDir);
 
-						// Create folder with zip name
-						const zipName = Url.basename(zipFile).replace(/\.zip$/, "");
-						const extractDir = Url.join(targetDir, zipName);
+						const targetFs = fsOperation(targetDir);
+						if (await fsOperation(extractDir).exists()) {
+							zipName = `${zipName}_${helpers.uuid()}`;
+							extractDir = Url.join(targetDir, zipName);
+						}
 						await targetFs.createDirectory(zipName);
 
 						const files = Object.keys(zip.files);
 						const total = files.length;
 						let current = 0;
 
+						// Internal helper to recursively construct folders or empty files
+						const createFileRecursive = async (
+							parent,
+							dir,
+							shouldBeDirAtEnd,
+						) => {
+							if (isCancelled) {
+								throw new Error("Cancelled");
+							}
+							let wantDirEnd = !!shouldBeDirAtEnd;
+							let parts;
+							if (typeof dir === "string") {
+								if (dir.endsWith("/")) wantDirEnd = true;
+								dir = dir.replace(/\\/g, "/");
+								parts = dir.split("/");
+							} else {
+								parts = dir;
+							}
+							parts = parts.filter((d) => d);
+							const cd = parts.shift();
+							if (!cd) return;
+							const newParent = Url.join(parent, cd);
+
+							const isLast = parts.length === 0;
+							const needDir = !isLast || wantDirEnd;
+							if (!(await fsOperation(newParent).exists())) {
+								if (needDir) {
+									try {
+										await fsOperation(parent).createDirectory(cd);
+									} catch (e) {
+										if (!(await fsOperation(newParent).exists())) throw e;
+									}
+								} else {
+									try {
+										await fsOperation(parent).createFile(cd);
+									} catch (e) {
+										if (!(await fsOperation(newParent).exists())) throw e;
+									}
+								}
+							}
+							if (parts.length) {
+								await createFileRecursive(newParent, parts, wantDirEnd);
+							}
+						};
+
+						const sanitizeZipPath = (p, isDir) => {
+							if (!p) return "";
+							let path = String(p);
+							path = path.replace(/\\/g, "/");
+							path = path.replace(/^[a-zA-Z]+:\/\//, "");
+							path = path.replace(/^\/+/, "");
+							path = path.replace(/^[A-Za-z]:\//, "");
+
+							const parts = path.split("/");
+							const stack = [];
+							for (const part of parts) {
+								if (!part || part === ".") continue;
+								if (part === "..") {
+									if (stack.length) stack.pop();
+									continue;
+								}
+								stack.push(part);
+							}
+							let safe = stack.join("/");
+							if (isDir && safe && !safe.endsWith("/")) safe += "/";
+							return safe;
+						};
+
+						const isUnsafeAbsolutePath = (p) => {
+							if (!p) return false;
+							const s = String(p);
+							if (/^[A-Za-z]:[\\\/]/.test(s)) return true;
+							if (s.startsWith("//")) return true;
+							if (s.startsWith("/")) return true;
+							return false;
+						};
+
 						for (const filePath of files) {
-							const file = zip.files[filePath];
+							if (isCancelled) {
+								throw new Error("Cancelled");
+							}
+
+							const entry = zip.files[filePath];
 							current++;
 
 							loadingLoader.setMessage(
 								`Extracting ${filePath} (${Math.round((current / total) * 100)}%)`,
 							);
 
-							if (file.dir) {
-								await fsOperation(extractDir).createDirectory(filePath);
-							} else {
-								const content = await file.async("arraybuffer");
-								await fsOperation(extractDir).createFile(filePath, content);
+							let correctFile = filePath.replace(/\\/g, "/");
+							const isDirEntry = entry.dir || correctFile.endsWith("/");
+
+							if (isUnsafeAbsolutePath(filePath)) {
+								continue;
 							}
+
+							correctFile = sanitizeZipPath(correctFile, isDirEntry);
+							if (!correctFile) continue;
+
+							const fileUrl = Url.join(extractDir, correctFile);
+
+							if (isDirEntry) {
+								await createFileRecursive(extractDir, correctFile, true);
+								continue;
+							}
+
+							const lastSlash = correctFile.lastIndexOf("/");
+							if (lastSlash !== -1) {
+								const parentRel = correctFile.slice(0, lastSlash + 1);
+								await createFileRecursive(extractDir, parentRel, true);
+							}
+
+							await createFileRecursive(extractDir, correctFile, false);
+
+							if (isCancelled) {
+								throw new Error("Cancelled");
+							}
+							const content = await entry.async("arraybuffer");
+							if (isCancelled) {
+								throw new Error("Cancelled");
+							}
+							await fsOperation(fileUrl).writeFile(content);
+						}
+
+						if (isCancelled) {
+							throw new Error("Cancelled");
 						}
 
 						loadingLoader.destroy();
@@ -325,7 +475,15 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 						reload();
 					} catch (err) {
 						loadingLoader.destroy();
-						helpers.error(err);
+						if (err && err.message === "Cancelled") {
+							try {
+								await fsOperation(extractDir).delete();
+							} catch (deleteErr) {
+								console.error("Cleanup failed:", deleteErr);
+							}
+						} else {
+							helpers.error(err);
+						}
 					}
 					break;
 				}
@@ -337,6 +495,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				case "addFtp":
 				case "addSftp": {
 					const storage = await remoteStorage[action]();
+					if (!storage) break;
 					updateStorage(storage);
 					break;
 				}
@@ -353,6 +512,18 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			if (!action) return;
 
 			switch (action) {
+				case "copy":
+					if (currentDir.url === "/" || !selectedItems.size) {
+						break;
+					}
+
+					copiedItems = Array.from(selectedItems);
+					toast(strings.success);
+					isSelectionMode = false;
+					toggleSelectionMode(false);
+					updatePasteToggler();
+					break;
+
 				case "compress":
 					if (currentDir.url === "/") {
 						break;
@@ -450,43 +621,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 					);
 
 					try {
-						for (const url of selectedItems) {
-							if ((await fsOperation(url).stat()).isDirectory) {
-								if (url.startsWith("content://com.termux.documents/tree/")) {
-									const fs = fsOperation(url);
-									const entries = await fs.lsDir();
-									if (entries.length === 0) {
-										await fs.delete();
-									} else {
-										const deleteRecursively = async (currentUrl) => {
-											const currentFs = fsOperation(currentUrl);
-											const currentEntries = await currentFs.lsDir();
-											for (const entry of currentEntries) {
-												if (entry.isDirectory) {
-													await deleteRecursively(entry.url);
-												} else {
-													await fsOperation(entry.url).delete();
-												}
-											}
-											await currentFs.delete();
-										};
-										await deleteRecursively(url);
-									}
-								} else {
-									await fsOperation(url).delete();
-								}
-								helpers.updateUriOfAllActiveFiles(url);
-								recents.removeFolder(url);
-							} else {
-								const fs = fsOperation(url);
-								await fs.delete();
-								const openedFile = editorManager.getFile(url, "uri");
-								if (openedFile) openedFile.uri = null;
-							}
-							recents.removeFile(url);
-							openFolder.removeItem(url);
-							delete cachedDir[url];
-						}
+						for (const url of selectedItems) await deleteDirOrFile(url);
 						toast(strings.success);
 						reload();
 						isSelectionMode = false;
@@ -512,7 +647,6 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 
 		$page.onhide = function () {
 			hideSearchBar();
-			hideAd();
 			actionStack.clearFromMark();
 			actionStack.remove("filebrowser");
 			$content.removeEventListener("click", handleClick);
@@ -535,10 +669,186 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			$page.hide();
 		}
 
+		function selectDocument() {
+			checkFiles.check = false;
+			sdcard.openDocumentFile(
+				(res) => {
+					res.url = res.uri;
+					resolve({
+						type: "file",
+						...res,
+						name: res.filename,
+						mode: "single",
+					});
+					$page.hide();
+				},
+				(err) => {
+					helpers.error(err);
+				},
+			);
+		}
+
+		/**
+		 * @param {string} url
+		 */
+		function isTermuxUrl(url) {
+			url = `${url ?? ""}`;
+			return url.startsWith("content://com.termux.documents/tree/");
+		}
+
+		/**
+		 * @param {string} url
+		 * @param {string} [type]
+		 */
+		async function deleteDirOrFile(url, type) {
+			const fs = fsOperation(url);
+			const isDir = type ? helpers.isDir(type) : (await fs.stat()).isDirectory;
+
+			if (isDir && isTermuxUrl(url)) {
+				const deleteRecursively = async (currentFs) => {
+					const entries = await currentFs.lsDir();
+					if (entries) {
+						for (const entry of entries) {
+							const fs = fsOperation(entry.url);
+							await (entry.isDirectory ? deleteRecursively(fs) : fs.delete());
+						}
+					}
+					await currentFs.delete();
+				};
+				await deleteRecursively(fs);
+			} else {
+				await fs.delete();
+			}
+
+			if (isDir) {
+				helpers.updateUriOfAllActiveFiles(url);
+				recents.removeFolder(url);
+			} else {
+				const openedFile = editorManager.getFile(url, "uri");
+				if (openedFile) openedFile.uri = null;
+			}
+			recents.removeFile(url);
+			openFolder.removeItem(url);
+			cachedDir.delete(url);
+		}
+
 		function updateSelectionCount($count) {
 			if ($count) {
 				$count.textContent = `${selectedItems.size} items selected`;
 			}
+		}
+
+		function updatePasteToggler() {
+			$pasteToggler.style.display =
+				copiedItems.length &&
+				currentDir.url !== "/" &&
+				!isSelectionMode &&
+				!isPasting
+					? ""
+					: "none";
+		}
+
+		async function pasteCopiedItems() {
+			if (isPasting || !copiedItems.length || currentDir.url === "/") return;
+
+			isPasting = true;
+			updatePasteToggler();
+
+			const targetDirUrl = currentDir.url;
+			const loadingDialog = loader.create(
+				strings.loading,
+				strings["copying items"]?.replace("{count}", copiedItems.length) ||
+					`Copying ${copiedItems.length} items...`,
+			);
+
+			let copiedCount = 0;
+			let skippedCount = 0;
+
+			try {
+				for (const url of copiedItems) {
+					const fs = fsOperation(url);
+					const stat = await fs.stat();
+					const name = stat.name || Url.basename(url);
+
+					const result = await copyEntry(url, targetDirUrl, {
+						name,
+						stat,
+						excludePatterns: appSettings.value.useFileOperationExclusions
+							? appSettings.value.excludeFolders
+							: [],
+						async onBeforeCopy() {
+							if (stat.isDirectory && isInsideDirectory(url, targetDirUrl)) {
+								alert(
+									strings.warning,
+									strings["cannot paste folder into itself"] ||
+										"Cannot paste a folder into itself",
+								);
+								return false;
+							}
+
+							const possibleConflictUrl = Url.join(targetDirUrl, name);
+							if (!(await fsOperation(possibleConflictUrl).exists())) {
+								return true;
+							}
+
+							if (Url.areSame(url, possibleConflictUrl)) return false;
+
+							const targetFs = fsOperation(possibleConflictUrl);
+							const targetStat = await targetFs.stat();
+							if (stat.isDirectory || targetStat.isDirectory) {
+								alert(
+									strings.warning,
+									strings["folder already exists"] || "Folder already exists",
+								);
+								return false;
+							}
+
+							const confirmation = await confirm(
+								strings.warning,
+								strings["file already exists force named"]
+									? strings["file already exists force named"].replace(
+											"{name}",
+											name,
+										)
+									: `"${name}" already exists in this location.`,
+							);
+							if (!confirmation) return false;
+
+							await targetFs.delete();
+							return true;
+						},
+					});
+					if (result.url) copiedCount++;
+					skippedCount += result.skipped;
+				}
+			} catch (err) {
+				helpers.error(err);
+			} finally {
+				if (copiedCount) {
+					toast(strings.success);
+					reload();
+				} else if (skippedCount) {
+					toast(strings.skipped);
+				}
+				if (copiedCount || skippedCount) copiedItems = [];
+				loadingDialog.destroy();
+				isPasting = false;
+				updatePasteToggler();
+			}
+		}
+
+		function isInsideDirectory(sourceUrl, targetUrl) {
+			let source = Url.parse(sourceUrl).url;
+			let target = Url.parse(targetUrl).url;
+
+			if (source.endsWith("/")) source = source.slice(0, -1);
+			if (target.endsWith("/")) target = target.slice(0, -1);
+
+			return (
+				source === target ||
+				target.startsWith(source + "/") ||
+				target.startsWith(source + "\\")
+			);
 		}
 
 		function toggleSelectionMode(active) {
@@ -581,6 +891,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				$list
 					.querySelectorAll(".tile:not(.selection-header)")
 					.forEach((item) => {
+						if (item.dataset.notSelectable != null) return;
 						const checkbox = Checkbox("", false);
 						checkbox.onclick = () => {
 							const url = item.querySelector("data-url").textContent;
@@ -596,13 +907,27 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 
 				$addMenuToggler.style.display = "none";
 				$menuToggler.style.display = "none";
+				$selectDocument.style.display = "none";
 				$selectionMenuToggler.style.display = "";
+				updatePasteToggler();
 
 				// Disable floating button in selection mode
 				if ($openFolder) {
 					$openFolder.disabled = true;
 				}
+
+				if (!actionStack.has("fbSelection")) {
+					actionStack.push({
+						id: "fbSelection",
+						action: () => {
+							isSelectionMode = false;
+							toggleSelectionMode(false);
+						},
+					});
+				}
 			} else {
+				actionStack.remove("fbSelection");
+
 				$list.classList.remove("selection-mode");
 				$list.querySelector(".selection-header")?.remove();
 				$list.querySelectorAll(".input-checkbox").forEach((cb) => cb.remove());
@@ -610,7 +935,9 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 
 				$addMenuToggler.style.display = "";
 				$menuToggler.style.display = "";
+				$selectDocument.style.display = "";
 				$selectionMenuToggler.style.display = "none";
+				updatePasteToggler();
 
 				// Re-enable floating button when exiting selection mode
 				if ($openFolder) {
@@ -631,12 +958,12 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			const $el = e.target;
 
 			if (isSelectionMode) {
-				const checkbox = $el.closest(".tile")?.querySelector(".input-checkbox");
+				const $el2 = $el.closest(".tile");
+				if ($el2?.dataset.notSelectable != null) return;
+				const checkbox = $el2?.querySelector(".input-checkbox");
 				if (checkbox && !$el.closest(".selection-header")) {
 					checkbox.checked = !checkbox.checked;
-					const url = $el
-						.closest(".tile")
-						.querySelector("data-url").textContent;
+					const url = $el2.querySelector("data-url").textContent;
 					if (checkbox.checked) {
 						selectedItems.add(url);
 					} else {
@@ -648,16 +975,16 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				return;
 			}
 
-			let action = $el.getAttribute("action") || $el.dataset.action;
+			let action = $el.dataset.action;
 			if (!action) return;
 
 			let url = $el.dataset.url;
-			let name = $el.dataset.name || $el.getAttribute("name");
-			const idOpenDoc = $el.hasAttribute("open-doc");
-			const uuid = $el.getAttribute("uuid");
-			const type = $el.getAttribute("type");
-			const storageType = $el.getAttribute("storageType");
-			const home = $el.getAttribute("home");
+			let name = $el.dataset.name;
+			const isOpenDoc = $el.dataset.openDoc != null;
+			const uuid = $el.dataset.uuid;
+			const type = $el.dataset.type;
+			const storageType = $el.dataset.storageType;
+			const home = $el.dataset.home;
 			const isDir = ["dir", "directory", "folder"].includes(type);
 
 			if (!url) {
@@ -679,7 +1006,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				return;
 			}
 
-			if (!url && action === "open" && isDir && !idOpenDoc && !isContextMenu) {
+			if (!url && action === "open" && isDir && !isOpenDoc && !isContextMenu) {
 				loader.hide();
 				util.addPath(name, uuid).then((res) => {
 					const storage = allStorages.find((storage) => storage.uuid === uuid);
@@ -694,7 +1021,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			}
 
 			if (isContextMenu) action = "contextmenu";
-			else if (idOpenDoc) action = "open-doc";
+			else if (isOpenDoc) action = "openDoc";
 
 			switch (action) {
 				case "navigation":
@@ -707,16 +1034,17 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 					if (isDir) folder();
 					else if (!$el.hasAttribute("disabled")) file();
 					break;
-				case "open-doc":
-					openDoc();
+				case "openDoc":
+					selectDocument();
 					break;
 			}
 
-			function folder() {
+			async function folder() {
 				if (home) {
 					navigateToHome();
 					return;
 				}
+
 				navigate(url, name);
 			}
 
@@ -762,19 +1090,27 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 
 			async function contextMenuHandler() {
 				if (appSettings.value.vibrateOnTap) {
-					navigator.vibrate(constants.VIBRATION_TIME);
+					navigator.vibrate(config.VIBRATION_TIME);
 				}
-				if ($el.getAttribute("open-doc") === "true") return;
+				if (isOpenDoc) return;
 
 				const deleteText =
 					currentDir.url === "/" ? strings.remove : strings.delete;
 				const options = [
 					["delete", deleteText, "delete"],
-					["rename", strings.rename, "text_format"],
+					["rename", strings.rename, "edit"],
 				];
 
 				if (/s?ftp/.test(storageType)) {
 					options.push(["edit", strings.edit, "edit"]);
+				}
+
+				if (storageType === "sftp" && uuid) {
+					options.push([
+						"ssh_terminal",
+						strings["open ssh terminal"] || "Open SSH Terminal",
+						"terminal",
+					]);
 				}
 
 				if (helpers.isFile(type)) {
@@ -798,14 +1134,19 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 
 						const confirmation = await confirm(strings.warning, message);
 						if (!confirmation) break;
-						deleteFunction();
+						await deleteFunction();
 						break;
 					}
 
 					case "rename": {
-						let newname = await prompt(strings.rename, name, "text", {
-							match: constants.FILE_NAME_REGEX,
-						});
+						let newname = await prompt(
+							strings.rename,
+							name,
+							helpers.isFile(type) ? "filename" : "text",
+							{
+								match: config.FILE_NAME_REGEX,
+							},
+						);
 
 						newname = helpers.fixFilename(newname);
 						if (!newname || newname === name) break;
@@ -825,13 +1166,32 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 						break;
 					}
 
+					case "ssh_terminal": {
+						const { TerminalManager } = await import(
+							/* webpackChunkName: "terminal" */ "components/terminal"
+						);
+						await TerminalManager.createRemoteTerminal({ url, name });
+						$page.hide();
+						break;
+					}
+
 					case "info":
 						acode.exec("file-info", url);
 						break;
 
 					case "copyuri":
-						navigator.clipboard.writeText(url);
-						alert(strings.success, strings["copied to clipboard"]);
+						if (typeof cordova !== "undefined" && cordova?.plugins?.clipboard) {
+							cordova.plugins.clipboard.copy(url);
+						} else if (navigator.clipboard?.writeText) {
+							await navigator.clipboard.writeText(url);
+						} else {
+							alert(
+								strings.error,
+								strings["clipboard not available"] ||
+									"Clipboard is not available.",
+							);
+							break;
+						}
 						break;
 
 					case "open_with":
@@ -859,40 +1219,25 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			}
 
 			async function renameFile(newname) {
-				if (url.startsWith("content://com.termux.documents/tree/")) {
-					if (helpers.isDir(type)) {
-						alert(strings.warning, strings["rename not supported"]);
-						return;
-					} else {
-						// Special handling for Termux content files
-						const fs = fsOperation(url);
-						try {
-							const content = await fs.readFile();
-							const newUrl = Url.join(Url.dirname(url), newname);
-							await fsOperation(Url.dirname(url)).createFile(newname, content);
-							await fs.delete();
-
-							recents.removeFile(url);
-							recents.addFile(newUrl);
-							const file = editorManager.getFile(url, "uri");
-							if (file) {
-								file.uri = newUrl;
-								file.filename = newname;
-							}
-							openFolder.renameItem(url, newUrl, newname);
-							toast(strings.success);
-							reload();
-							return;
-						} catch (err) {
-							window.log("error", err);
-							helpers.error(err);
-							return;
-						}
-					}
-				}
-				const fs = fsOperation(url);
+				let newUrl;
 				try {
-					const newUrl = await fs.renameTo(newname);
+					if (isTermuxUrl(url)) {
+						if (helpers.isDir(type)) {
+							alert(strings.warning, strings["rename not supported"]);
+							return;
+						} else {
+							// Special handling for Termux content files
+							const fs = fsOperation(url);
+							const content = await fs.readFile();
+							const dirname = Url.dirname(url);
+							newUrl = Url.join(dirname, newname);
+							await fsOperation(dirname).createFile(newname, content);
+							await fs.delete();
+						}
+					} else {
+						const fs = fsOperation(url);
+						newUrl = await fs.renameTo(newname);
+					}
 					recents.removeFile(url);
 					recents.addFile(newUrl);
 					const file = editorManager.getFile(url, "uri");
@@ -911,42 +1256,8 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 
 			async function removeFile() {
 				try {
-					if (helpers.isDir(type)) {
-						if (url.startsWith("content://com.termux.documents/tree/")) {
-							const fs = fsOperation(url);
-							const entries = await fs.lsDir();
-							if (entries.length === 0) {
-								await fs.delete();
-							} else {
-								const deleteRecursively = async (currentUrl) => {
-									const currentFs = fsOperation(currentUrl);
-									const currentEntries = await currentFs.lsDir();
-									for (const entry of currentEntries) {
-										if (entry.isDirectory) {
-											await deleteRecursively(entry.url);
-										} else {
-											await fsOperation(entry.url).delete();
-										}
-									}
-									await currentFs.delete();
-								};
-								await deleteRecursively(url);
-							}
-						} else {
-							await fsOperation(url).delete();
-						}
-						helpers.updateUriOfAllActiveFiles(url);
-						recents.removeFolder(url);
-					} else {
-						const fs = fsOperation(url);
-						await fs.delete();
-						const openedFile = editorManager.getFile(url, "uri");
-						if (openedFile) openedFile.uri = null;
-					}
-					recents.removeFile(url);
-					openFolder.removeItem(url);
+					await deleteDirOrFile(url, type);
 					toast(strings.success);
-					delete cachedDir[url];
 					reload();
 				} catch (err) {
 					window.log("error", err);
@@ -954,28 +1265,61 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				}
 			}
 
-			function removeStorage() {
-				if (url) {
-					recents.removeFolder(url);
-					recents.removeFile(url);
+			async function removeStorage() {
+				const removedStorage = storageList.find(
+					(storage) => storage.uuid === uuid,
+				);
+				const storageUrl = removedStorage?.url || url;
+
+				if (storageUrl) {
+					recents.removeFolder(storageUrl);
+					recents.removeFile(storageUrl);
+					openFolder.removeFolders(storageUrl);
+					helpers.updateUriOfAllActiveFiles(storageUrl, null);
+				}
+				if (
+					storageUrl &&
+					removedStorage &&
+					(removedStorage.storageType === "sftp" ||
+						removedStorage.type === "sftp")
+				) {
+					const profileId = getSftpProfileId(storageUrl);
+					const { username, hostname, port = 22 } = Url.decodeUrl(storageUrl);
+					const connectionID = profileId || `${username}@${hostname}:${port}`;
+					await new Promise((resolve) => {
+						sftp.isConnected((activeConnectionID) => {
+							if (activeConnectionID !== connectionID) {
+								resolve();
+								return;
+							}
+							sftp.close(resolve, resolve);
+						}, resolve);
+					});
+					const profileStillUsed = storageList.some(
+						(storage) =>
+							storage.uuid !== uuid &&
+							getSftpProfileId(storage.url) === profileId,
+					);
+					if (profileId && !profileStillUsed) {
+						await deleteSftpProfile(profileId);
+					}
 				}
 				storageList = storageList.filter((storage) => {
 					if (storage.uuid !== uuid) {
 						return true;
 					}
 
-					if (storage.url) {
+					if (storage.url && !getSftpProfileId(storage.url)) {
 						const parsedUrl = URLParse(storage.url, true);
 						const keyFile = decodeURIComponent(
 							parsedUrl.query["keyFile"] || "",
 						);
-						if (keyFile) {
-							fsOperation(keyFile).delete();
-						}
+						if (keyFile) fsOperation(keyFile).delete().catch(console.warn);
 					}
 					return false;
 				});
 				localStorage.storageList = JSON.stringify(storageList);
+				acode.exec("save-state");
 				reload();
 			}
 
@@ -986,25 +1330,6 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				});
 				localStorage.storageList = JSON.stringify(storageList);
 				reload();
-			}
-
-			function openDoc() {
-				checkFiles.check = false;
-				sdcard.openDocumentFile(
-					(res) => {
-						res.url = res.uri;
-						resolve({
-							type: "file",
-							...res,
-							name: res.filename,
-							mode: "single",
-						});
-						$page.hide();
-					},
-					(err) => {
-						helpers.error(err);
-					},
-				);
 			}
 		}
 
@@ -1048,6 +1373,12 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 
 			try {
 				const terminalPublicUrl = cordova.file.dataDirectory + "public";
+				const exists = await fsOperation(terminalPublicUrl).exists();
+				if (!exists) {
+					await fsOperation(cordova.file.dataDirectory).createDirectory(
+						"public",
+					);
+				}
 
 				// Check if this storage is not already in the list
 				const terminalPublicStorageExists = allStorages.find(
@@ -1060,6 +1391,13 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 					util.pushFolder(allStorages, "Terminal Public", terminalPublicUrl, {
 						uuid: "terminal-public",
 					});
+				}
+
+				// Migrate any files left in the legacy alpine/home and
+				// alpine/root directories into public/MIGRATE so they are
+				// not hidden after the home/root/public merge.
+				if (typeof Terminal !== "undefined" && Terminal.migrateLegacyHome) {
+					Terminal.migrateLegacyHome();
 				}
 			} catch (err) {
 				console.error("Error while adding public directory", err);
@@ -1096,12 +1434,14 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				util.pushFolder(allStorages, strings["add a storage"], "", {
 					storageType: "notification",
 					uuid: "addstorage",
+					notSelectable: true,
 				});
 			}
 
 			if (IS_FILE_MODE) {
-				util.pushFolder(allStorages, "Select document", null, {
-					"open-doc": true,
+				util.pushFolder(allStorages, SELECT_DOCUMENT_LABEL, null, {
+					openDoc: true,
+					notSelectable: true,
 				});
 			}
 
@@ -1119,20 +1459,24 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			let list = [];
 			let error = false;
 
-			if (url in cachedDir) {
-				return cachedDir[url];
+			if (cachedDir.has(url)) {
+				return cachedDir.get(url);
 			} else {
 				if (url === "/") {
 					list = await listAllStorages();
 				} else {
 					const id = helpers.uuid();
+					let loaderTimeout = 10000;
+
+					if (["ftp:", "sftp:"].includes(Url.getProtocol(url))) {
+						loaderTimeout = 0;
+					}
 
 					progress[id] = true;
 					const timeout = setTimeout(() => {
 						loader.create(name, strings.loading + "...", {
-							timeout: 10000,
-							callback() {
-								loader.destroy();
+							timeout: loaderTimeout,
+							oncancel() {
 								navigate("/", "/");
 								progress[id] = false;
 							},
@@ -1250,7 +1594,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				}
 
 				let entryName = await prompt(title, "", "filename", {
-					match: constants.FILE_NAME_REGEX,
+					match: config.FILE_NAME_REGEX,
 					required: true,
 				});
 
@@ -1279,7 +1623,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 				loader.destroy();
 				projectName = await prompt(strings["project name"], project, "text", {
 					required: true,
-					match: constants.FILE_NAME_REGEX,
+					match: config.FILE_NAME_REGEX,
 				});
 
 				if (!projectName) return;
@@ -1348,7 +1692,7 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 					className="nav"
 					data-url={url}
 					data-name={displayName}
-					attr-action="navigation"
+					data-action="navigation"
 					attr-text={displayName}
 					tabIndex={-1}
 				></span>,
@@ -1451,8 +1795,8 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			const $oldList = $content.get("#list");
 			if ($oldList) {
 				const { url } = currentDir;
-				if (url && cachedDir[url]) {
-					cachedDir[url].scroll = $oldList.scrollTop;
+				if (url && cachedDir.has(url)) {
+					cachedDir.get(url).scroll = $oldList.scrollTop;
 				}
 				$oldList.remove();
 			}
@@ -1461,12 +1805,13 @@ function FileBrowserInclude(mode, info, doesOpenLast = true) {
 			$list.focus();
 
 			currentDir = dir;
-			cachedDir[dir.url] = dir;
+			cachedDir.set(dir.url, dir);
+			updatePasteToggler();
 		}
 
 		function reload() {
 			const { url, name } = currentDir;
-			delete cachedDir[url];
+			cachedDir.delete(url);
 			navigate(url, name);
 		}
 

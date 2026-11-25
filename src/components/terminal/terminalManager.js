@@ -3,18 +3,19 @@
  * Handles terminal session creation and management
  */
 
-import EditorFile from "lib/editorFile";
-import TerminalComponent from "./terminal";
-import TerminalTouchSelection from "./terminalTouchSelection";
 import "@xterm/xterm/css/xterm.css";
 import quickTools from "components/quickTools";
 import toast from "components/toast";
 import alert from "dialogs/alert";
 import confirm from "dialogs/confirm";
+import EditorFile from "lib/editorFile";
 import openFile from "lib/openFile";
 import openFolder from "lib/openFolder";
 import appSettings from "lib/settings";
 import helpers from "utils/helpers";
+import Url from "utils/Url";
+import TerminalComponent from "./terminal";
+import TerminalTouchSelection from "./terminalTouchSelection";
 
 const TERMINAL_SESSION_STORAGE_KEY = "acodeTerminalSessions";
 
@@ -276,6 +277,7 @@ class TerminalManager {
 			const shouldRender = render !== false;
 			const isServerMode = serverMode !== false;
 			const isReconnecting = reconnecting === true;
+			const isRemoteSsh = !!terminalOptions.remoteSsh;
 
 			const terminalId = `terminal_${++this.terminalCounter}`;
 			const providedName =
@@ -289,7 +291,7 @@ class TerminalManager {
 				: terminalName;
 
 			// Check if terminal is installed before proceeding
-			if (isServerMode) {
+			if (isServerMode && !isRemoteSsh) {
 				const installationResult = await this.checkAndInstallTerminal();
 				if (!installationResult.success) {
 					throw new Error(installationResult.error);
@@ -308,14 +310,17 @@ class TerminalManager {
 				id: `terminal-${terminalId}`,
 			});
 
-			// Terminal styles (inject once)
-			if (!document.getElementById("acode-terminal-styles")) {
-				const terminalStyles = this.getTerminalStyles();
-				const terminalStyle = tag("style", {
+			// Terminal styles (inject or update)
+			const terminalStyles = this.getTerminalStyles();
+			let terminalStyle = document.getElementById("acode-terminal-styles");
+			if (!terminalStyle) {
+				terminalStyle = tag("style", {
 					id: "acode-terminal-styles",
 					textContent: terminalStyles,
 				});
 				document.body.appendChild(terminalStyle);
+			} else {
+				terminalStyle.textContent = terminalStyles;
 			}
 
 			// Create EditorFile for terminal
@@ -366,7 +371,11 @@ class TerminalManager {
 
 						this.terminals.set(uniqueId, instance);
 
-						if (terminalComponent.serverMode && terminalComponent.pid) {
+						if (
+							terminalComponent.serverMode &&
+							!terminalComponent.remoteSsh &&
+							terminalComponent.pid
+						) {
 							await this.persistTerminalSession(
 								terminalComponent.pid,
 								terminalName,
@@ -396,7 +405,7 @@ class TerminalManager {
 						}
 
 						// Show alert for terminal creation failure
-						if (!isReconnecting) {
+						if (!isReconnecting && !error?.reported) {
 							const errorMessage = error?.message || "Unknown error";
 							alert(
 								strings["error"],
@@ -442,12 +451,12 @@ class TerminalManager {
 			const installResult = await Terminal.install(
 				(message) => {
 					// Remove stdout/stderr prefix for
-					const cleanMessage = message.replace(/^(stdout|stderr)\s+/, "");
+					const cleanMessage = this.formatInstallLog(message);
 					installTerminal.component.write(`${cleanMessage}\r\n`);
 				},
-				(error) => {
+				(...errorParts) => {
 					// Remove stdout/stderr prefix
-					const cleanError = error.replace(/^(stdout|stderr)\s+/, "");
+					const cleanError = this.formatInstallLog(errorParts);
 					installTerminal.component.write(
 						`\x1b[31mError: ${cleanError}\x1b[0m\r\n`,
 					);
@@ -458,19 +467,32 @@ class TerminalManager {
 			if (installResult === true) {
 				return { success: true };
 			} else {
+				const error =
+					Terminal.lastInstallError ||
+					"Terminal installation failed - process did not exit with code 0";
 				return {
 					success: false,
-					error:
-						"Terminal installation failed - process did not exit with code 0",
+					error,
 				};
 			}
 		} catch (error) {
 			console.error("Terminal installation failed:", error);
 			return {
 				success: false,
-				error: `Terminal installation failed: ${error.message}`,
+				error: `Terminal installation failed: ${this.formatInstallLog(error)}`,
 			};
 		}
+	}
+
+	formatInstallLog(value) {
+		const values = Array.isArray(value) ? value : [value];
+		const message = values
+			.filter((entry) => entry != null)
+			.map((entry) => Terminal.formatError(entry))
+			.filter(Boolean)
+			.join(" ");
+
+		return message.replace(/^(stdout|stderr)\s+/, "") || "Unknown error";
 	}
 
 	/**
@@ -492,14 +514,17 @@ class TerminalManager {
 			id: `terminal-${terminalId}`,
 		});
 
-		// Terminal styles (inject once)
-		if (!document.getElementById("acode-terminal-styles")) {
-			const terminalStyles = this.getTerminalStyles();
-			const terminalStyle = tag("style", {
+		// Terminal styles (inject or update)
+		const terminalStyles = this.getTerminalStyles();
+		let terminalStyle = document.getElementById("acode-terminal-styles");
+		if (!terminalStyle) {
+			terminalStyle = tag("style", {
 				id: "acode-terminal-styles",
 				textContent: terminalStyles,
 			});
 			document.body.appendChild(terminalStyle);
+		} else {
+			terminalStyle.textContent = terminalStyles;
 		}
 
 		// Create EditorFile for terminal
@@ -568,25 +593,33 @@ class TerminalManager {
 		const textarea = terminalComponent.terminal?.textarea;
 		if (textarea) {
 			const onFocus = () => {
-				const { $toggler } = quickTools;
-				$toggler.classList.add("hide");
-				clearTimeout(this.togglerTimeout);
-				this.togglerTimeout = setTimeout(() => {
-					$toggler.style.display = "none";
-				}, 300);
+				clearTimeout(this.onBlurTimeout);
+				this.onFocusTimeout = setTimeout(() => {
+					const { $toggler } = quickTools;
+					$toggler.classList.add("hide");
+					clearTimeout(this.quickToolsTogglerTimeout);
+					this.quickToolsTogglerTimeout = setTimeout(() => {
+						$toggler.style.display = "none";
+					}, 300);
+				}, 100);
 			};
 
 			const onBlur = () => {
-				const { $toggler } = quickTools;
-				clearTimeout(this.togglerTimeout);
-				$toggler.style.display = "";
-				setTimeout(() => {
-					$toggler.classList.remove("hide");
-				}, 10);
+				clearTimeout(this.onFocusTimeout);
+				this.onBlurTimeout = setTimeout(() => {
+					const { $toggler } = quickTools;
+					$toggler.style.display = "";
+					clearTimeout(this.quickToolsTogglerTimeout);
+					requestAnimationFrame(() => $toggler.classList.remove("hide"));
+				}, 100);
 			};
 
 			textarea.addEventListener("focus", onFocus);
 			textarea.addEventListener("blur", onBlur);
+
+			if (textarea === document.activeElement) {
+				onFocus();
+			}
 
 			terminalComponent.cleanupFocusHandlers = () => {
 				textarea.removeEventListener("focus", onFocus);
@@ -655,14 +688,30 @@ class TerminalManager {
 		const RESIZE_DEBOUNCE = 200;
 		let lastResizeTime = 0;
 
-		let lastWidth = 0;
-		let lastHeight = 0;
-		const resizeObserver = new ResizeObserver((entries) => {
+		let lastWidth = null;
+		let lastHeight = null;
+
+		const handleResize = (entries) => {
 			const now = Date.now();
 			const entry = entries && entries[0];
 			const cr = entry?.contentRect;
 			const width = cr?.width ?? terminalFile.content?.clientWidth ?? 0;
 			const height = cr?.height ?? terminalFile.content?.clientHeight ?? 0;
+
+			// Skip resize events when container is hidden (via any method: inline style, CSS class, etc.)
+			const isHidden =
+				getComputedStyle(terminalFile.content).display === "none" ||
+				terminalFile.content?.offsetHeight === 0;
+			if (isHidden) {
+				return;
+			}
+
+			if (lastWidth === null || lastHeight === null) {
+				lastWidth = width;
+				lastHeight = height;
+
+				return;
+			}
 
 			// Clear any pending resize
 			if (resizeTimeout) {
@@ -693,38 +742,93 @@ class TerminalManager {
 					console.error(`Resize error for terminal ${terminalId}:`, error);
 				}
 			}, RESIZE_DEBOUNCE);
-		});
+		};
+
+		const resizeObserver =
+			typeof ResizeObserver === "function"
+				? new ResizeObserver(handleResize)
+				: null;
+		let resizeFallbackInterval = null;
 
 		// Wait for the terminal container to be available, then observe it
 		setTimeout(() => {
 			const containerElement = terminalFile.content;
 			if (containerElement && containerElement instanceof Element) {
-				resizeObserver.observe(containerElement);
-				// store observer so we can disconnect on close
-				terminalFile._resizeObserver = resizeObserver;
+				if (resizeObserver) {
+					resizeObserver.observe(containerElement);
+					// store observer so we can disconnect on close
+					terminalFile._resizeObserver = resizeObserver;
+				} else {
+					resizeFallbackInterval = setInterval(() => handleResize(), 500);
+					terminalFile._resizeObserver = {
+						disconnect() {
+							clearInterval(resizeFallbackInterval);
+						},
+					};
+				}
 			} else {
 				console.warn("Terminal container not available for ResizeObserver");
 			}
 		}, 200);
+
+		// Idempotent end-of-session path. Exit JSON, unexpected disconnect, and
+		// socket errors all funnel here so a missed exit message can't leave a
+		// zombie tab with a dead PTY.
+		let sessionFinished = false;
+		const finishTerminalSession = async ({
+			message = null,
+			showToast = true,
+			errorAlert = null,
+		} = {}) => {
+			if (sessionFinished) return;
+			sessionFinished = true;
+
+			try {
+				terminalComponent.intentionalClose = true;
+				await this.closeTerminal(terminalId, true);
+			} catch (error) {
+				console.error(
+					`Failed to finish terminal session ${terminalId}:`,
+					error,
+				);
+			}
+
+			if (showToast && message) {
+				toast(message);
+			}
+			if (errorAlert) {
+				alert(strings["error"], errorAlert);
+			}
+		};
 
 		// Terminal event handlers
 		terminalComponent.onConnect = () => {
 			console.log(`Terminal ${terminalId} connected`);
 		};
 
-		terminalComponent.onDisconnect = () => {
-			console.log(`Terminal ${terminalId} disconnected`);
+		terminalComponent.onDisconnect = (info = {}) => {
+			console.log(`Terminal ${terminalId} disconnected`, info);
+
+			// User/tab close and dispose intentionally close the socket.
+			if (info.intentional) return;
+
+			// Exit message already drove finishTerminalSession (or is about to).
+			// Still call finish so a race can't leave the tab open; it's idempotent.
+			const message = info.processExited ? null : "Terminal session ended";
+			void finishTerminalSession({
+				message,
+				showToast: !info.processExited,
+			});
 		};
 
 		terminalComponent.onError = (error) => {
 			console.error(`Terminal ${terminalId} error:`, error);
 
-			// Close the terminal and remove the tab
-			this.closeTerminal(terminalId, true);
-
-			// Show alert for connection error
 			const errorMessage = error?.message || "Connection lost";
-			alert(strings["error"], `Terminal connection error: ${errorMessage}`);
+			void finishTerminalSession({
+				showToast: false,
+				errorAlert: `Terminal connection error: ${errorMessage}`,
+			});
 		};
 
 		terminalComponent.onTitleChange = async (title) => {
@@ -733,7 +837,11 @@ class TerminalManager {
 				const formattedTitle = `${titlePrefix} - ${title}`;
 				terminalFile.filename = formattedTitle;
 
-				if (terminalComponent.serverMode && terminalComponent.pid) {
+				if (
+					terminalComponent.serverMode &&
+					!terminalComponent.remoteSsh &&
+					terminalComponent.pid
+				) {
 					await this.persistTerminalSession(
 						terminalComponent.pid,
 						formattedTitle,
@@ -753,24 +861,28 @@ class TerminalManager {
 		};
 
 		terminalComponent.onProcessExit = (exitData) => {
-			// Format exit message based on exit code and signal
+			const data = exitData && typeof exitData === "object" ? exitData : {};
 			let message;
-			if (exitData.signal) {
-				message = `Process terminated by signal ${exitData.signal}`;
-			} else if (exitData.exit_code === 0) {
-				message = `Process exited successfully (code ${exitData.exit_code})`;
+			if (data.signal) {
+				message = `Process terminated by signal ${data.signal}`;
+			} else if (data.exit_code === 0 || data.exit_code === "0") {
+				message = `Process exited successfully (code ${data.exit_code})`;
+			} else if (data.exit_code !== undefined && data.exit_code !== null) {
+				message = `Process exited with code ${data.exit_code}`;
+			} else if (typeof exitData === "string" || typeof exitData === "number") {
+				message = `Process exited with code ${exitData}`;
 			} else {
-				message = `Process exited with code ${exitData.exit_code}`;
+				message = "Process exited";
 			}
 
-			this.closeTerminal(terminalId);
-			terminalFile._skipTerminalCloseConfirm = true;
-			terminalFile.remove(true, { ignorePinned: true });
-			toast(message);
+			void finishTerminalSession({ message });
 		};
 
 		// Handle acode CLI open commands (OSC 7777)
 		terminalComponent.onOscOpen = async (type, path) => {
+			// OSC 7777 is an Acode-local CLI protocol. Remote hosts must not use it
+			// to request access to paths on the Android device.
+			if (terminalComponent.remoteSsh) return;
 			if (!path) return;
 
 			// Convert proot path
@@ -800,6 +912,10 @@ class TerminalManager {
 
 		// Set up custom title function for terminal
 		const getTerminalTitle = () => {
+			if (terminalComponent.remoteSsh) {
+				const { username, hostname, displayName } = terminalComponent.remoteSsh;
+				return displayName || `${username}@${hostname}`;
+			}
 			if (terminalComponent.pid) {
 				return `PID: ${terminalComponent.pid}`;
 			}
@@ -813,18 +929,28 @@ class TerminalManager {
 	/**
 	 * Close a terminal session
 	 * @param {string} terminalId - Terminal ID
+	 * @param {boolean} removeTab - Also remove the editor tab
+	 * @returns {Promise<void>}
 	 */
-	closeTerminal(terminalId, removeTab = false) {
+	async closeTerminal(terminalId, removeTab = false) {
 		const terminal = this.terminals.get(terminalId);
 		if (!terminal) return;
 
 		try {
-			if (terminal.component.serverMode && terminal.component.pid) {
+			if (terminal.component) {
+				terminal.component.intentionalClose = true;
+			}
+
+			if (
+				terminal.component.serverMode &&
+				!terminal.component.remoteSsh &&
+				terminal.component.pid
+			) {
 				this.removePersistedSession(terminal.component.pid);
 			}
 
 			// Cleanup resize observer
-			if (terminal.file._resizeObserver) {
+			if (terminal.file?._resizeObserver) {
 				terminal.file._resizeObserver.disconnect();
 				terminal.file._resizeObserver = null;
 			}
@@ -837,14 +963,14 @@ class TerminalManager {
 			// Dispose terminal component
 			terminal.component.dispose();
 
-			// Remove from map
+			// Remove from map before tab removal so onclose re-entry is a no-op
 			this.terminals.delete(terminalId);
 
 			// Optionally remove the tab as well
 			if (removeTab && terminal.file) {
 				try {
 					terminal.file._skipTerminalCloseConfirm = true;
-					terminal.file.remove(true, { ignorePinned: true });
+					await terminal.file.remove(true, { ignorePinned: true });
 				} catch (removeError) {
 					console.error("Error removing terminal tab:", removeError);
 				}
@@ -944,6 +1070,20 @@ class TerminalManager {
 			.terminal-content .xterm {
 				padding: 0.25rem;
 				box-sizing: border-box;
+				touch-action: none;
+			}
+
+			.terminal-content .xterm-viewport,
+			.terminal-content .xterm-scrollable-element {
+				background-color: transparent !important;
+				overscroll-behavior: none;
+			}
+
+			.terminal-content
+				.terminal-scrollbar-hidden
+				.xterm-scrollable-element
+				> .scrollbar.vertical {
+				display: none !important;
 			}
 		`;
 	}
@@ -969,6 +1109,40 @@ class TerminalManager {
 		return this.createTerminal({
 			...options,
 			serverMode: true,
+		});
+	}
+
+	/**
+	 * Create an SSH terminal using credentials from an SFTP storage URL.
+	 * @param {string|{url: string, name?: string}} storage - SFTP storage
+	 * @param {object} options - Terminal options
+	 * @returns {Promise<object>} Terminal instance
+	 */
+	async createRemoteTerminal(storage, options = {}) {
+		const url = typeof storage === "string" ? storage : storage?.url;
+		const storageName = typeof storage === "object" ? storage?.name : null;
+
+		if (!url || !/^sftp:/.test(url)) {
+			throw new Error("A valid SFTP storage is required");
+		}
+
+		const { hostname, pathname } = Url.decodeUrl(url);
+		const profileId = hostname?.startsWith("profile-") ? hostname : null;
+		if (!profileId) {
+			throw new Error(
+				"The SFTP storage has not been migrated to a native profile",
+			);
+		}
+
+		return this.createTerminal({
+			...options,
+			name: options.name || `SSH - ${storageName || hostname}`,
+			serverMode: true,
+			remoteSsh: {
+				profileId,
+				displayName: storageName || "SSH",
+				initialDirectory: pathname || "/",
+			},
 		});
 	}
 

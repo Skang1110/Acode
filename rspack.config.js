@@ -4,8 +4,19 @@ const { rspack } = require('@rspack/core');
 module.exports = (env, options) => {
   const { mode = 'development' } = options;
   const prod = mode === 'production';
+  const isDev = process.env.DEV_MODE === 'true';
+  const devHost = process.env.DEV_HOST || '';
+  const devPort = process.env.DEV_PORT || '';
+  const devProto = isDev ? (process.env.DEV_PROTO || '') : '';
+  const devOrigin = isDev && devHost && devPort && devProto
+    ? ''.concat(devProto, '://', devHost, ':', devPort)
+    : '';
 
   const rules = [
+    {
+      test: /typescript[\\/]lib[\\/]lib\..*\.d\.ts$/,
+      type: 'asset/source',
+    },
     // TypeScript/TSX files - Custom JSX loader + SWC
     {
       test: /\.tsx?$/,
@@ -19,16 +30,6 @@ module.exports = (env, options) => {
                 syntax: 'typescript',
                 tsx: false,
               },
-              transform: {
-                // react: {
-                //   pragma: 'tag',
-                //   pragmaFrag: 'Array',
-                //   throwIfNamespace: false,
-                //   development: false,
-                //   useBuiltins: false,
-                //   runtime: 'classic',
-                // },
-              },
               target: 'es2015',
             },
           },
@@ -41,8 +42,11 @@ module.exports = (env, options) => {
       test: /\.m?js$/,
       oneOf: [
         // Node modules - use builtin:swc-loader only
+        // The codemirror-lsp-client submodule is installed through a "file:"
+        // dependency, so it resolves to its real path outside node_modules. It
+        // still ships pre-built code and must not go through the source loaders.
         {
-          include: /node_modules/,
+          include: /[\\/](?:node_modules|codemirror-lsp-client)[\\/]/,
           use: [
             {
               loader: 'builtin:swc-loader',
@@ -92,41 +96,90 @@ module.exports = (env, options) => {
       ],
       type: 'javascript/auto',
     },
+    {
+      test: /\.svg$/,
+      resourceQuery: /raw/,
+      type: 'asset/source',
+    },
+    {
+      test: /\.(png|svg|jpg|jpeg|ico|webp)(\?.*)?$/,
+      resourceQuery: /inline/,
+      type: 'asset/inline',
+    },
     // Asset files
     {
       test: /\.(png|svg|jpg|jpeg|ico|ttf|webp|eot|woff|webm|mp4|wav)(\?.*)?$/,
+      resourceQuery: { not: [/raw/, /inline/] },
       type: 'asset/resource',
     },
-    // Regular CSS/SCSS files
+    // Regular CSS files do not need Sass processing. Passing icon CSS through
+    // Sass converts escaped private-use code points into literal characters in
+    // production, which Cordova's asset WebView renders as missing glyphs.
     {
-      test: /(?<!\.m)\.(sa|sc|c)ss$/,
+      test: /(?<!\.m)\.css$/,
+      type: 'javascript/auto',
+      use: [
+        rspack.CssExtractRspackPlugin.loader,
+        'css-loader',
+        'postcss-loader',
+      ],
+    },
+    // Regular Sass/SCSS files
+    {
+      test: /\.(?<!\.m\.)(sa|sc)ss$/,
+      type: 'javascript/auto',
       use: [
         rspack.CssExtractRspackPlugin.loader,
         'css-loader',
         'postcss-loader',
         'sass-loader',
       ],
-      type: 'javascript/auto',
     },
   ];
 
   const main = {
     mode,
+    node: {
+      __dirname: false,
+      __filename: false,
+    },
     entry: {
+      boot: './src/boot.js',
       main: './src/main.js',
       console: './src/lib/console.js',
+      consoleWorker: './src/lib/consoleWorker.js',
       searchInFilesWorker: './src/sidebarApps/searchInFiles/worker.js',
+      searchIndexWorker: './src/sidebarApps/searchInFiles/indexWorker.js',
+      htmlLspWorker: './src/cm/lsp/workers/html.worker.ts',
+      cssLspWorker: './src/cm/lsp/workers/css.worker.ts',
+      jsonLspWorker: './src/cm/lsp/workers/json.worker.ts',
+      typescriptLspWorker: './src/cm/lsp/workers/typescript.worker.ts',
     },
     output: {
       path: path.resolve(__dirname, 'www/build/'),
       filename: '[name].js',
       chunkFilename: '[name].chunk.js',
       assetModuleFilename: '[name][ext]',
-      publicPath: '/build/',
-      clean: true,
+      publicPath: devOrigin ? ''.concat(devOrigin, '/build/') : '/build/',
+      clean: !isDev,
     },
+    // TypeScript's Node-only plugin loader uses a dynamic require. It is never
+    // reached by the browser worker, but Rspack cannot prove that statically.
+    ignoreWarnings: [
+      {
+        module: /typescript[\\/]lib[\\/]typescript\.js$/,
+        message: /Critical dependency/,
+      },
+    ],
     module: {
       rules,
+      exprContextCritical: false,
+      parser: {
+        javascript: {
+          exportsPresence: 'error',
+          requireAlias: false,
+        },
+      },
     },
     resolve: {
       extensions: ['.ts', '.tsx', '.js', '.mjs', '.json'],
@@ -135,11 +188,28 @@ module.exports = (env, options) => {
         crypto: false,
       },
       modules: ['node_modules', 'src'],
+      roots: [],
     },
     plugins: [
+      new rspack.DefinePlugin({
+        __DEV_MODE__: JSON.stringify(isDev),
+        __DEV_HOST__: JSON.stringify(devHost),
+        __DEV_PORT__: JSON.stringify(devPort),
+        __DEV_PROTO__: JSON.stringify(devProto),
+      }),
       new rspack.CssExtractRspackPlugin({
         filename: '[name].css',
       }),
+      // core-js replaces the native Array.prototype.push below Chrome 122,
+      // for edge cases (lengths past 2^32 - 1, push() with no arguments on an
+      // array with a read-only length) nothing relies on. Its JS version is
+      // ~8x slower, and the parser and CodeMirror push constantly, so keep the
+      // native one. Only core-js's global polyfill is dropped: core-js-pure,
+      // which Babel's runtime helpers import, is untouched.
+      new rspack.NormalModuleReplacementPlugin(
+        /[\\/]node_modules[\\/]core-js[\\/]modules[\\/]es\.array\.push\.js$/,
+        path.resolve(__dirname, 'utils/empty-module.js'),
+      ),
     ],
   };
 

@@ -1,3 +1,9 @@
+import "./runtimes/registerBuiltins";
+
+export type {
+	LspWorkerHostHandler,
+	LspWorkerTransportOptions,
+} from "./api";
 export {
 	bundles,
 	default as lspApi,
@@ -5,8 +11,12 @@ export {
 	defineServer,
 	installers,
 	register,
+	registerRuntime,
+	runtimes,
 	servers,
+	unregisterRuntime,
 	upsert,
+	workers,
 } from "./api";
 export { default as clientManager, LspClientManager } from "./clientManager";
 export type { CodeActionItem } from "./codeActions";
@@ -21,6 +31,16 @@ export {
 	supportsCodeActions,
 } from "./codeActions";
 export {
+	goToDeclaration,
+	goToDefinition,
+	goToImplementation,
+	goToTypeDefinition,
+	jumpToDeclaration,
+	jumpToDefinition,
+	jumpToImplementation,
+	jumpToTypeDefinition,
+} from "./definition";
+export {
 	clearDiagnosticsEffect,
 	getLspDiagnostics,
 	LSP_DIAGNOSTICS_EVENT,
@@ -28,6 +48,21 @@ export {
 	lspDiagnosticsExtension,
 	lspDiagnosticsUiExtension,
 } from "./diagnostics";
+export type {
+	DocumentColorsConfig,
+	LspDocumentColor,
+} from "./documentColors";
+export {
+	cssToLspColor,
+	didReplaceLspDocumentColors,
+	documentColorsClientExtension,
+	documentColorsEditorExtension,
+	documentColorsExtension,
+	hasColorProvider,
+	lspColorToCss,
+	lspColorToHex,
+	lspDocumentColorsField,
+} from "./documentColors";
 export type {
 	DocumentSymbolsResult,
 	FlatSymbol,
@@ -51,6 +86,14 @@ export {
 	inlayHintsExtension,
 } from "./inlayHints";
 export {
+	addLspLog,
+	clearLspLogs,
+	getLspLogs,
+	type LspLogEntry,
+	type LspLogLevel,
+	onLspLog,
+} from "./logs";
+export {
 	closeReferencesPanel,
 	findAllReferences,
 	findAllReferencesInTab,
@@ -60,6 +103,33 @@ export {
 	acodeRenameKeymap,
 	renameSymbol,
 } from "./rename";
+export {
+	checkRuntimeServerInstallation,
+	getRuntimeInstallCommand,
+	getRuntimeLabelForServer,
+	getRuntimeUninstallCommand,
+	installRuntimeServer,
+	uninstallRuntimeServer,
+} from "./runtimeActions";
+export {
+	BUILTIN_ALPINE_RUNTIME_ID,
+	EXTERNAL_WEBSOCKET_RUNTIME_ID,
+	getRuntimeProvider,
+	inferWorkspaceKind,
+	isBuiltinAlpineAccessible,
+	listRuntimeProviders,
+	registerRuntimeProvider,
+	selectRuntimeProvider,
+	unregisterRuntimeProvider,
+	WEB_WORKER_RUNTIME_ID,
+} from "./runtimeProviders";
+export {
+	AUTO_RUNTIME_ID,
+	getDefaultRuntimeSetting,
+	getServerRuntimeSetting,
+	setDefaultRuntime,
+	setServerRuntime,
+} from "./runtimeSettings";
 export {
 	ensureServerRunning,
 	resetManagedServers,
@@ -72,7 +142,6 @@ export {
 	showSignatureHelp,
 } from "./tooltipExtensions";
 export { createTransport } from "./transport";
-
 export type {
 	BuiltinExtensionsConfig,
 	ClientManagerOptions,
@@ -85,13 +154,21 @@ export type {
 	LSPDiagnostic,
 	LSPFormattingOptions,
 	LSPPluginAPI,
+	LspClientScope,
 	LspDiagnostic,
+	LspRuntimeConnection,
+	LspRuntimeContext,
+	LspRuntimeProvider,
+	LspRuntimeUriResolution,
+	LspRuntimeUriResolutionContext,
 	LspServerDefinition,
 	Position,
 	Range,
 	TextEdit,
 	TransportDescriptor,
 	TransportHandle,
+	WorkspaceKind,
 	WorkspaceOptions,
 } from "./types";
+export { createWorkerTransport } from "./workerTransport";
 export { default as AcodeWorkspace } from "./workspace";

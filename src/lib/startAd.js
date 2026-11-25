@@ -1,39 +1,105 @@
-import tag from "html-tag-js";
+import {
+	AdConsentCoordinator,
+	EMPTY_PRIVACY_STATE,
+} from "./adConsentCoordinator.mjs";
+import {
+	BANNER_SUPPRESSION_REASON,
+	bannerVisibilityController,
+} from "./bannerVisibilityController.mjs";
+import config from "./config";
 
-let adUnitIdBanner = "ca-app-pub-5911839694379275/9157899592"; // Production
-let adUnitIdInterstitial = "ca-app-pub-5911839694379275/9570937608"; // Production
-let adUnitIdRewarded = "ca-app-pub-5911839694379275/1633667633"; // Production
-let initialized = false;
+export { BANNER_SUPPRESSION_REASON };
+
+export let adUnitIdBanner = "ca-app-pub-5911839694379275/9157899592"; // Production
+export let adUnitIdInterstitial = "ca-app-pub-5911839694379275/9570937608"; // Production
+export let adUnitIdRewarded = "ca-app-pub-5911839694379275/1633667633"; // Production
+export let initialized = false;
+
+/** @type {import("plugins/admob/src/www").BannerAd} */
+export let bannerAd = null;
+/** @type {import("plugins/admob/src/www").InterstitialAd} */
+export let interstitialAd = null;
+let consentCoordinator = null;
 
 export default async function startAd() {
-	if (!IS_FREE_VERSION || !admob) return;
-
-	if (!initialized) {
-		initialized = true;
-
-		if (BuildInfo.type === "debug") {
-			adUnitIdBanner = "ca-app-pub-3940256099942544/6300978111"; // Test
-			adUnitIdInterstitial = "ca-app-pub-3940256099942544/1033173712"; // Test
-			adUnitIdRewarded = "ca-app-pub-3940256099942544/5224354917"; // Test
+	if (!canUseAdmob()) {
+		if (
+			!config.HAS_PRO &&
+			typeof admob !== "undefined" &&
+			window.ANDROID_SDK_INT < 29
+		) {
+			console.warn("AdMob not supported on this Android version, skipping ads");
 		}
+		return;
 	}
 
-	const consentStatus = await consent.getConsentStatus();
-	if (consentStatus === consent.ConsentStatus.Required) {
-		await consent.requestInfoUpdate();
+	try {
+		await getConsentCoordinator().start();
+	} catch (error) {
+		console.error("Failed to initialize ads:", error);
+	}
+}
+
+export function getPrivacyState() {
+	return consentCoordinator?.state ?? { ...EMPTY_PRIVACY_STATE };
+}
+
+/**
+ * Subscribes to normalized UMP state. The current state is emitted immediately.
+ * @param {(state:typeof EMPTY_PRIVACY_STATE)=>void} listener
+ * @returns {()=>void}
+ */
+export function subscribePrivacyState(listener) {
+	if (typeof listener !== "function") {
+		throw new TypeError("Privacy state listener must be a function.");
 	}
 
-	const formStatus = await consent.getFormStatus();
-	if (formStatus === consent.FormStatus.Available) {
-		const form = await consent.loadForm();
-		form.show();
+	if (!canUseAdmob()) {
+		listener(getPrivacyState());
+		return () => {};
+	}
+
+	return getConsentCoordinator().subscribe(listener);
+}
+
+export async function showPrivacyOptions() {
+	if (!canUseAdmob()) {
+		throw new Error("AdMob Privacy Choices are unavailable.");
+	}
+	return getConsentCoordinator().showPrivacyOptions();
+}
+
+function canUseAdmob() {
+	return (
+		!config.HAS_PRO &&
+		typeof admob !== "undefined" &&
+		window.ANDROID_SDK_INT >= 29
+	);
+}
+
+function getConsentCoordinator() {
+	consentCoordinator ??= new AdConsentCoordinator({
+		privacy: admob.privacy,
+		initializeAds,
+		onError: (error) =>
+			console.warn("Unable to refresh AdMob consent information:", error),
+	});
+	return consentCoordinator;
+}
+
+async function initializeAds() {
+	if (initialized) return;
+
+	if (BuildInfo.buildType === "debug") {
+		console.info("!!! Using test ads");
+		adUnitIdBanner = "ca-app-pub-3940256099942544/6300978111";
+		adUnitIdInterstitial = "ca-app-pub-3940256099942544/1033173712";
+		adUnitIdRewarded = "ca-app-pub-3940256099942544/5224354917";
 	}
 
 	await admob.start();
 
 	const currentHour = new Date().getHours();
-	//currentHour >= 22: Covers 10:00 PM to 11:59 PM.
-	//currentHour < 4: Covers 12:00 AM to 3:59 AM.
 	const isQuietHours = currentHour >= 22 || currentHour < 4;
 
 	await admob.configure({
@@ -45,34 +111,49 @@ export default async function startAd() {
 		adUnitId: adUnitIdBanner,
 		position: "bottom",
 	});
-
 	const interstitial = new admob.InterstitialAd({
 		adUnitId: adUnitIdInterstitial,
 	});
 
-	interstitial.load();
-
-	interstitial.on("dismiss", () => {
-		interstitial.load();
+	interstitial.load().catch((error) => {
+		console.warn("Failed to preload interstitial ad:", error);
 	});
+	interstitial.on("dismiss", () => {
+		interstitial.load().catch((error) => {
+			console.warn("Failed to reload interstitial ad:", error);
+		});
+	});
+
+	bannerAd = banner;
+	interstitialAd = interstitial;
+	bannerVisibilityController.setBanner(banner);
 	window.ad = banner;
 	window.iad = interstitial;
 	window.adRewardedUnitId = adUnitIdRewarded;
+	initialized = true;
 }
 
 /**
- * Hides the ad
- * @param {Boolean} [force=false]
+ * Adds or removes one independent reason for hiding banner ads.
+ * @param {string} reason
+ * @param {boolean} suppressed
  */
-export function hideAd(force = false) {
-	const { ad } = window;
-	if (ad?.active) {
-		const $pages = tag.getAll(".page-replacement");
-		const hide = $pages.length === 1;
+export function setBannerSuppressed(reason, suppressed) {
+	bannerVisibilityController.setSuppressed(reason, suppressed);
+}
 
-		if (force || hide) {
-			ad.active = false;
-			ad.hide();
-		}
-	}
+/**
+ * Registers a page as eligible to display the shared banner.
+ * @param {HTMLElement} page
+ */
+export function requestBannerForPage(page) {
+	bannerVisibilityController.registerPage(page);
+}
+
+/**
+ * Temporarily suppresses the banner while the soft keyboard is visible.
+ * @param {boolean} visible
+ */
+export function setBannerKeyboardVisible(visible) {
+	bannerVisibilityController.setKeyboardVisible(visible);
 }

@@ -22,6 +22,7 @@ import tag from "html-tag-js";
  * @param {HTMLElement} [options.parent]
  * @param {"top"|"left"|"right"|"bottom"} [options.placement = "right"]
  * @param {Number} [options.width]
+ * @param {Number} [options.thumbHeight = 50]
  * @param {function():void} [options.onscroll]
  * @param {function():void} [options.onscrollend]
  * @returns {Scrollbar & HTMLElement}
@@ -62,6 +63,7 @@ export default function ScrollBar(options) {
 		y: 0,
 	};
 	let scrollbarSize = 20;
+	let thumbHeight = options.thumbHeight ?? 50;
 	let height;
 	let width;
 	let rect;
@@ -74,6 +76,7 @@ export default function ScrollBar(options) {
 	if (options.width) scrollbarSize = options.width;
 
 	setWidth(scrollbarSize);
+	setThumbHeight(thumbHeight);
 	$scrollbar.onScroll = options.onscroll;
 	$scrollbar.onScrollEnd = options.onscrollend;
 	$thumb.addEventListener("touchstart", touchStart, config);
@@ -91,6 +94,18 @@ export default function ScrollBar(options) {
 	function setWidth(width) {
 		if (isVertical) $scrollbar.style.width = $cursor.style.width = width + "px";
 		else $scrollbar.style.height = $cursor.style.height = width + "px";
+	}
+
+	function setThumbHeight(value) {
+		thumbHeight = value;
+		if (isVertical) {
+			$thumb.style.height = thumbHeight + "px";
+			$thumb.style.marginTop = "0px";
+		} else {
+			$thumb.style.width = thumbHeight + "px";
+			$thumb.style.marginLeft = "0px";
+		}
+		resize();
 	}
 
 	/**
@@ -158,7 +173,10 @@ export default function ScrollBar(options) {
 	 * @param {TouchEvent|MouseEvent} e
 	 */
 	function touchEnd(e) {
-		e.preventDefault();
+		// A cancelled touchend makes Android WebView show the keyboard when
+		// the editor has focus, even after the user hid it (#3058). The
+		// cancelled touchstart already stops the click and page scrolling.
+		if (e.type !== "touchend") e.preventDefault();
 		touchStarted = false;
 		$scrollbar.classList.remove("active");
 		document.removeEventListener("touchmove", touchMove, config);
@@ -172,16 +190,27 @@ export default function ScrollBar(options) {
 
 	function resize(render = true) {
 		rect = $scrollbar.getBoundingClientRect();
-		height = rect.height - 20;
-		width = rect.width - 20;
+		height = rect.height - 20 - thumbHeight;
+		width = rect.width - 20 - thumbHeight;
 
 		if (height < 0) height = 0;
 		if (width < 0) width = 0;
-		if (render && height && width) setValue(scroll);
+		if (render && trackLength()) setValue(scroll);
+	}
+
+	/**
+	 * Length the thumb travels along the scrollbar's axis. The cross axis is
+	 * always 0 (the bar is thinner than the thumb), so only this one counts.
+	 */
+	function trackLength() {
+		return isVertical ? height : width;
 	}
 
 	function setValue(val) {
-		if (!height || !width) resize(false);
+		// Measure each time, as the parent can change size without a window
+		// resize (e.g. the sidebar opening). A detached bar has an empty rect;
+		// show() measures it once it's back on the page.
+		if ($scrollbar.isConnected) resize(false);
 
 		//Make sure value is between 0 and 1
 		if (val < 0) val = 0;
@@ -215,6 +244,9 @@ export default function ScrollBar(options) {
 		$scrollbar.classList.remove("hide");
 		if (!$scrollbar.isConnected) {
 			options.parent.append($scrollbar);
+			// The value may have been set while detached, against an empty
+			// rect; measure again so the thumb isn't painted at 0.
+			resize();
 			if (typeof onshow === "function") onshow();
 		}
 	}
@@ -237,6 +269,11 @@ export default function ScrollBar(options) {
 	Object.defineProperty($scrollbar, "size", {
 		get: () => scrollbarSize,
 		set: setWidth,
+	});
+
+	Object.defineProperty($scrollbar, "thumbHeight", {
+		get: () => thumbHeight,
+		set: setThumbHeight,
 	});
 
 	Object.defineProperty($scrollbar, "resize", {

@@ -6,11 +6,11 @@ Thank you for your interest in contributing to Acode! This guide will help you g
 
 ### Option 1: DevContainer (Recommended)
 
-1. Install the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) in VS Code or other editors that support DevContainers.
+1. Install the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) in VS Code or other editors that support [DevContainers](https://containers.dev/).
 
 2. Clone and open the repository:
    ```bash
-   git clone https://github.com/Acode-Foundation/Acode.git
+   git clone --recurse-submodules https://github.com/Acode-Foundation/Acode.git
    code Acode
    ```
 
@@ -28,15 +28,18 @@ Thank you for your interest in contributing to Acode! This guide will help you g
 
 ### Option 2: Docker CLI (For Any Editor)
 
+> [!NOTE]
+> If you try to use Podman, Kindly note that it would not work properly until https://github.com/containers/buildah/pull/5845 is merged/implemented in Podman.
+
 If your editor doesn't support DevContainers, you can use Docker directly:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Acode-Foundation/Acode.git
+git clone --recurse-submodules https://github.com/Acode-Foundation/Acode.git
 cd Acode
 
 # Build the Docker image from our Dockerfile
-docker build -t acode-dev .devcontainer/
+docker build --target standalone -t acode-dev .devcontainer/
 
 # Run the container with your code mounted
 docker run -it --rm \
@@ -106,7 +109,7 @@ Some more environment variables, check [cordova docs](https://cordova.apache.org
 
 ```bash
 # Clone the repository
-git clone https://github.com/Acode-Foundation/Acode.git
+git clone --recurse-submodules https://github.com/Acode-Foundation/Acode.git
 cd Acode
 
 # Install dependencies and set up Cordova
@@ -118,6 +121,43 @@ pnpm run build paid dev apk # or pnpm run build p d
 
 The APK will be at: `platforms/android/app/build/outputs/apk/debug/app-debug.apk`
 
+> [!NOTE]
+> `@codemirror/lsp-client` comes from the `codemirror-lsp-client` git submodule and is installed as a local `file:` dependency, so the submodule must be cloned before `setup` runs. If it isn't, `setup` stops with a missing-submodules error — see [Troubleshooting](#-troubleshooting).
+
+## 🔧 Troubleshooting
+
+### `setup` fails: submodules are not checked out
+
+`@codemirror/lsp-client` is not fetched from a registry. It comes from the
+[`codemirror-lsp-client`](https://github.com/Acode-Foundation/codemirror-lsp-client)
+git submodule and is installed as a local `file:` dependency.
+
+Before installing dependencies, `pnpm run setup` reads `.gitmodules` and verifies that
+every submodule it declares has actually been cloned — a directory only counts as cloned
+when it contains at least one non-hidden file. An empty, missing, or partial checkout (for
+example one holding only `.git` or `node_modules`) therefore stops setup with:
+
+```
+The following submodule(s) are not checked out (empty or absent):
+```
+
+To fix it, initialize the submodules from the repository root and re-run setup:
+
+```bash
+git submodule update --init --recursive
+pnpm run setup
+```
+
+This usually means the repository was cloned without `--recurse-submodules`. Cloning with
+submodules avoids the problem entirely:
+
+```bash
+git clone --recurse-submodules https://github.com/Acode-Foundation/Acode.git
+```
+
+> [!NOTE]
+> The check is skipped when `.gitmodules` is absent (for example an unpacked source
+> archive) or declares no submodules, so those setups are unaffected.
 
 ## 📝 Contribution Guidelines
 
@@ -143,6 +183,16 @@ The APK will be at: `platforms/android/app/build/outputs/apk/debug/app-debug.apk
 We use [Biome](https://biomejs.dev/) for linting and formatting:
 - Run `pnpm run check` before committing
 - Install the Biome VS Code extension for auto-formatting
+
+### Performance Changes
+
+Performance PRs must show a real, measurable improvement in Acode itself:
+
+- Include a profile from the app (for example, Chrome DevTools connected to the Android WebView) showing that the code you change is an actual bottleneck in something the user waits on.
+- Include before/after numbers measured in the app, with the device and steps used.
+- Microbenchmark results from sites like jsbench or measurethat are not accepted on their own. They time a function in a tight loop and say nothing about its effect in the app.
+- Keep the change focused on the bottleneck. Don't mix in rewrites of unrelated code, build scripts, Cordova hooks or vendored files.
+- The change must not alter behavior. Point out any output that differs from before.
 
 ### Commit Messages
 

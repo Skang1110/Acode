@@ -1,17 +1,17 @@
 import "./style.scss";
-
 import fsOperation from "fileSystem";
-import ajax from "@deadlyjack/ajax";
 import collapsableList from "components/collapsableList";
 import Sidebar from "components/sidebar";
 import alert from "dialogs/alert";
 import prompt from "dialogs/prompt";
 import select from "dialogs/select";
 import purchaseListener from "handlers/purchase";
-import constants from "lib/constants";
+import auth from "lib/auth";
+import config from "lib/config";
 import InstallState from "lib/installState";
 import loadPlugin from "lib/loadPlugin";
 import settings from "lib/settings";
+import { interstitialAd } from "lib/startAd";
 import FileBrowser from "pages/fileBrowser";
 import plugin from "pages/plugin";
 import helpers from "utils/helpers";
@@ -27,17 +27,17 @@ let container = null;
 let $searchResult = null;
 
 const LIMIT = 50;
+const SEARCH_INPUT_WAIT_TIMEOUT = 1000;
 let currentPage = 1;
 let hasMore = true;
 let isLoading = false;
 let currentFilter = null;
 let filterHasMore = true;
 let isFilterLoading = false;
-const SUPPORTED_EDITOR = "cm";
 
 function withSupportedEditor(url) {
 	const separator = url.includes("?") ? "&" : "?";
-	return `${url}${separator}supported_editor=${SUPPORTED_EDITOR}`;
+	return `${url}${separator}supported_editor=${config.SUPPORTED_EDITOR}`;
 }
 
 const $header = (
@@ -151,7 +151,7 @@ async function loadMorePlugins() {
 
 		const response = await fetch(
 			withSupportedEditor(
-				`${constants.API_BASE}/plugins?page=${currentPage}&limit=${LIMIT}`,
+				`${config.API_BASE}/plugins?page=${currentPage}&limit=${LIMIT}`,
 			),
 		);
 		const newPlugins = await response.json();
@@ -215,42 +215,86 @@ async function loadFilteredPlugins(filterState, isInitial = false) {
 async function searchPlugin() {
 	clearTimeout(searchTimeout);
 	searchTimeout = setTimeout(async () => {
-		// Clear filter when searching
-		currentFilter = null;
-		filterHasMore = true;
-		isFilterLoading = false;
-		$searchResult.onscroll = null;
-
-		$searchResult.content = "";
-		const status = await helpers.checkAPIStatus();
-		if (!status) {
-			$searchResult.content = (
-				<span className="error">{strings.api_error}</span>
-			);
-			return;
-		}
-
-		const query = this.value;
-		if (!query) return;
-
-		try {
-			$searchResult.classList.add("loading");
-			const plugins = await fsOperation(
-				withSupportedEditor(
-					Url.join(constants.API_BASE, `plugins?name=${query}`),
-				),
-			).readFile("json");
-
-			installedPlugins = await listInstalledPlugins();
-			$searchResult.content = plugins.map(ListItem);
-			updateHeight($searchResult);
-		} catch (error) {
-			window.log("error", error);
-			$searchResult.content = <span className="error">{strings.error}</span>;
-		} finally {
-			$searchResult.classList.remove("loading");
-		}
+		await runSearch(this.value);
 	}, 500);
+}
+
+async function runSearch(query) {
+	// Clear filter when searching
+	currentFilter = null;
+	filterHasMore = true;
+	isFilterLoading = false;
+	$searchResult.onscroll = null;
+
+	$searchResult.content = "";
+	const status = await helpers.checkAPIStatus();
+	if (!status) {
+		$searchResult.content = <span className="error">{strings.api_error}</span>;
+		return;
+	}
+
+	query = String(query || "").trim();
+	if (!query) return;
+
+	try {
+		$searchResult.classList.add("loading");
+		const plugins = await fsOperation(
+			withSupportedEditor(
+				Url.join(config.API_BASE, `plugins?name=${encodeURIComponent(query)}`),
+			),
+		).readFile("json");
+
+		installedPlugins = await listInstalledPlugins();
+		$searchResult.content = plugins.length ? (
+			plugins.map(ListItem)
+		) : (
+			<span className="error empty">
+				{strings["no plugins found"] || strings.empty || "No plugins found"}
+			</span>
+		);
+		updateHeight($searchResult);
+	} catch (error) {
+		window.log("error", error);
+		$searchResult.content = <span className="error">{strings.error}</span>;
+	} finally {
+		$searchResult.classList.remove("loading");
+	}
+}
+
+function getSearchInput() {
+	return container?.querySelector('input[name="search-ext"]');
+}
+
+function waitForSearchInput() {
+	const startTime = Date.now();
+
+	return new Promise((resolve) => {
+		const check = () => {
+			const searchInput = getSearchInput();
+			if (searchInput || Date.now() - startTime >= SEARCH_INPUT_WAIT_TIMEOUT) {
+				resolve(searchInput);
+				return;
+			}
+
+			requestAnimationFrame(check);
+		};
+
+		check();
+	});
+}
+
+export async function openWithSearch(query) {
+	Sidebar.show();
+	document
+		.querySelector('[data-action="sidebar-app"][data-id="extensions"]')
+		?.click();
+
+	const searchInput = await waitForSearchInput();
+	if (!searchInput) return;
+
+	searchInput.value = query;
+	clearTimeout(searchTimeout);
+	void runSearch(query);
 }
 
 async function filterPlugins() {
@@ -307,13 +351,17 @@ async function filterPlugins() {
 	};
 
 	if (option.type === "author") {
-		const authorName = (await prompt("Enter author name", "", "text"))?.trim();
+		const authorName = (
+			await prompt(strings["enter author name"], "", "text")
+		)?.trim();
 		if (!authorName) return;
 		filterState.value = authorName.toLowerCase();
 		filterState.originalValue = authorName;
 		filterState.displayLabel = `${option.baseLabel}: ${authorName}`;
 	} else if (option.type === "keywords") {
-		const rawKeywords = (await prompt("Enter keywords", "", "text"))?.trim();
+		const rawKeywords = (
+			await prompt(strings["enter keywords"], "", "text")
+		)?.trim();
 		if (!rawKeywords) return;
 		const keywordList = rawKeywords
 			.split(",")
@@ -378,7 +426,7 @@ async function addSource(sourceType, value = "https://") {
 	if (!sourceType) return;
 	let source;
 	if (sourceType === "remote") {
-		source = await prompt("Enter plugin source", value, "url");
+		source = await prompt(strings["enter plugin source"], value, "url");
 	} else {
 		source = (await FileBrowser("file", "Select plugin source")).url;
 	}
@@ -428,7 +476,7 @@ async function loadExplore() {
 
 		const response = await fetch(
 			withSupportedEditor(
-				`${constants.API_BASE}/plugins?page=${currentPage}&limit=${LIMIT}`,
+				`${config.API_BASE}/plugins?page=${currentPage}&limit=${LIMIT}`,
 			),
 		);
 		const plugins = await response.json();
@@ -495,13 +543,13 @@ async function getFilteredPlugins(filterState) {
 			if (filterState.value === "top_rated") {
 				response = await fetch(
 					withSupportedEditor(
-						`${constants.API_BASE}/plugins?explore=random&page=${page}&limit=${LIMIT}`,
+						`${config.API_BASE}/plugins?explore=random&page=${page}&limit=${LIMIT}`,
 					),
 				);
 			} else {
 				response = await fetch(
 					withSupportedEditor(
-						`${constants.API_BASE}/plugin?orderBy=${filterState.value}&page=${page}&limit=${LIMIT}`,
+						`${config.API_BASE}/plugin?orderBy=${filterState.value}&page=${page}&limit=${LIMIT}`,
 					),
 				);
 			}
@@ -542,7 +590,7 @@ async function getFilteredPlugins(filterState) {
 			const page = filterState.nextPage;
 			const response = await fetch(
 				withSupportedEditor(
-					`${constants.API_BASE}/plugins?page=${page}&limit=${LIMIT}`,
+					`${config.API_BASE}/plugins?page=${page}&limit=${LIMIT}`,
 				),
 			);
 			const data = await response.json();
@@ -712,7 +760,16 @@ function getLocalRes(id, name) {
 	return Url.join(PLUGIN_DIR, id, name);
 }
 
-function ListItem({ icon, name, id, version, downloads, installed, source }) {
+function ListItem({
+	icon,
+	name,
+	id,
+	version,
+	downloads,
+	installed,
+	source,
+	price,
+}) {
 	if (installed === undefined) {
 		installed = !!installedPlugins.find(({ id: _id }) => _id === id);
 	}
@@ -734,19 +791,21 @@ function ListItem({ icon, name, id, version, downloads, installed, source }) {
 			</span>
 			{installed ? (
 				<>
-					{source ? (
+					{source && (
 						<span className="icon replay" data-action="rebuild-plugin" />
-					) : null}
+					)}
 					<span className="icon more_vert" data-action="more-plugin-action" />
 				</>
 			) : (
-				<button
-					type="button"
-					className="install-btn"
-					data-action="install-plugin"
-				>
-					<span className="icon file_downloadget_app" />
-				</button>
+				!price && (
+					<button
+						type="button"
+						className="install-btn"
+						data-action="install-plugin"
+					>
+						<span className="icon file_downloadget_app" />
+					</button>
+				)
 			)}
 		</div>
 	);
@@ -769,61 +828,22 @@ function ListItem({ icon, name, id, version, downloads, installed, source }) {
 			try {
 				let purchaseToken;
 				let product;
-				const pluginUrl = Url.join(constants.API_BASE, `plugin/${id}`);
+				const pluginUrl = Url.join(config.API_BASE, `plugin/${id}`);
 				const remotePlugin = await fsOperation(pluginUrl)
 					.readFile("json")
 					.catch(() => {
 						throw new Error("Failed to fetch plugin details");
 					});
 
-				const isPaid = remotePlugin.price > 0;
-				if (isPaid) {
-					[product] = await helpers.promisify(iap.getProducts, [
-						remotePlugin.sku,
-					]);
-					if (product) {
-						const purchase = await getPurchase(product.productId);
-						purchaseToken = purchase?.purchaseToken;
-					}
-				}
-
-				if (isPaid && !purchaseToken) {
-					if (!product) throw new Error("Product not found");
-					const apiStatus = await helpers.checkAPIStatus();
-
-					if (!apiStatus) {
-						alert(strings.error, strings.api_error);
-						return;
-					}
-
-					iap.setPurchaseUpdatedListener(
-						...purchaseListener(onpurchase, onerror),
-					);
-					await helpers.promisify(iap.purchase, product.productId);
-
-					async function onpurchase(e) {
-						const purchase = await getPurchase(product.productId);
-						await ajax.post(Url.join(constants.API_BASE, "plugin/order"), {
-							data: {
-								id: remotePlugin.id,
-								token: purchase?.purchaseToken,
-								package: BuildInfo.packageName,
-							},
-						});
-						purchaseToken = purchase?.purchaseToken;
-					}
-
-					async function onerror(error) {
-						throw error;
-					}
-				}
-
 				const { default: installPlugin } = await import("lib/installPlugin");
-				await installPlugin(
-					id,
-					remotePlugin.name,
-					purchaseToken ? purchaseToken : undefined,
-				);
+				await Promise.all([
+					loadAd(),
+					installPlugin(
+						id,
+						remotePlugin.name,
+						purchaseToken ? purchaseToken : undefined,
+					),
+				]);
 
 				const searchInput = container.querySelector('input[name="search-ext"]');
 				if (searchInput) {
@@ -845,6 +865,7 @@ function ListItem({ icon, name, id, version, downloads, installed, source }) {
 				if (!$installed.collapsed) {
 					$installed.ontoggle();
 				}
+				await helpers.showInterstitialIfReady();
 
 				async function getPurchase(sku) {
 					const purchases = await helpers.promisify(iap.getPurchases);
@@ -870,7 +891,7 @@ function ListItem({ icon, name, id, version, downloads, installed, source }) {
 		}
 
 		plugin(
-			{ id, installed },
+			{ id },
 			() => {
 				if (!$explore.collapsed) {
 					$explore.ontoggle();
@@ -893,14 +914,11 @@ function ListItem({ icon, name, id, version, downloads, installed, source }) {
 	return $el;
 }
 
-async function loadAd(el) {
+async function loadAd() {
 	if (!helpers.canShowAds()) return;
 	try {
-		if (!(await window.iad?.isLoaded())) {
-			const oldText = el.textContent;
-			el.textContent = strings["loading..."];
-			await window.iad.load();
-			el.textContent = oldText;
+		if (!(await interstitialAd?.isLoaded())) {
+			await interstitialAd?.load();
 		}
 	} catch (error) {
 		console.error(error);
@@ -912,7 +930,7 @@ async function uninstall(id) {
 		const pluginDir = Url.join(PLUGIN_DIR, id);
 		const state = await InstallState.new(id);
 		await Promise.all([
-			loadAd(this),
+			loadAd(),
 			fsOperation(pluginDir).delete(),
 			state.delete(state.storeUrl),
 		]);

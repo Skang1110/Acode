@@ -4,8 +4,8 @@ import Page from "components/page";
 import searchBar from "components/searchbar";
 import { DEFAULT_TERMINAL_SETTINGS } from "components/terminal";
 import toast from "components/toast";
-import box from "dialogs/box";
 import confirm from "dialogs/confirm";
+import dialog from "dialogs/dialog";
 import loader from "dialogs/loader";
 import prompt from "dialogs/prompt";
 import select from "dialogs/select";
@@ -13,7 +13,6 @@ import Ref from "html-tag-js/ref";
 import actionStack from "lib/actionStack";
 import fonts from "lib/fonts";
 import appSettings from "lib/settings";
-import { hideAd } from "lib/startAd";
 import FileBrowser from "pages/fileBrowser";
 import { updateActiveTerminals } from "settings/terminalSettings";
 import helpers from "utils/helpers";
@@ -44,7 +43,6 @@ export default function fontManager() {
 	});
 
 	$page.onhide = () => {
-		hideAd();
 		actionStack.remove("fontManager");
 	};
 
@@ -161,6 +159,11 @@ export default function fontManager() {
 
 			// Read and save the font file
 			const fontData = await fsOperation(fontUrl).readFile();
+
+			if (await fsOperation(FONT_FILE).exists()) {
+				await fsOperation(FONT_FILE).delete();
+			}
+
 			await fsOperation(FONT_DIR).createFile(fontFileName, fontData);
 
 			// Get internal URI for the saved font
@@ -178,7 +181,10 @@ export default function fontManager() {
 
 			// Show CSS preview/edit dialog
 			const editedCSS = await showCSSEditor(css, fontName);
-			if (editedCSS === null) return; // User cancelled
+			if (editedCSS === null) {
+				await fsOperation(FONT_FILE).delete();
+				return;
+			}
 
 			// Add the font
 			fonts.addCustom(fontName, editedCSS);
@@ -204,7 +210,7 @@ export default function fontManager() {
 				>${css}</textarea>
 			`;
 
-			const dialog = box(
+			const editDialog = dialog(
 				`Edit CSS - ${fontName}`,
 				htmlContent,
 				"Save",
@@ -221,11 +227,11 @@ export default function fontManager() {
 					const textarea = document.querySelector(".font-css-editor");
 					const value = textarea ? textarea.value : css;
 					resolve(value);
-					dialog.hide();
+					editDialog.hide();
 				})
 				.cancel(() => {
 					resolve(null);
-					dialog.hide();
+					editDialog.hide();
 				});
 		});
 	}

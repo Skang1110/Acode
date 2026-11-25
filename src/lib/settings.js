@@ -4,7 +4,7 @@ import themes from "theme/list";
 import { getSystemEditorTheme } from "theme/preInstalled";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
-import constants from "./constants";
+import config from "./config";
 import lang from "./lang";
 import { isDeviceDarkTheme } from "./systemConfiguration";
 
@@ -43,6 +43,7 @@ class Settings {
 	#fileBrowserSettings = {
 		showHiddenFiles: false,
 		sortByName: true,
+		listFiles: true,
 	};
 	#excludeFolders = [
 		"**/node_modules/**",
@@ -79,12 +80,12 @@ class Settings {
 		"**/temp/**",
 		"**/tmp/**",
 		"**/.cache/**",
+		"**/.gradle/**",
 		"**/logs/**",
 		"**/.sass-cache/**",
 		"**/.DS_Store/**",
 		"**/Thumbs.db/**",
 	];
-	#IS_TABLET = innerWidth > 768;
 
 	QUICKTOOLS_ROWS = 2;
 	QUICKTOOLS_GROUP_CAPACITY = 8;
@@ -119,8 +120,8 @@ class Settings {
 			formatter: {},
 			prettier: {},
 			maxFileSize: 12,
-			serverPort: constants.SERVER_PORT,
-			previewPort: constants.PREVIEW_PORT,
+			serverPort: config.SERVER_PORT,
+			previewPort: config.PREVIEW_PORT,
 			showConsoleToggler: true,
 			previewMode: this.PREVIEW_MODE_INAPP,
 			disableCache: false,
@@ -130,8 +131,17 @@ class Settings {
 			lang: "en-us",
 			uiZoom: 100,
 			fontSize: "12px",
+			cursorWidth: 2,
 			editorTheme: "one_dark",
-			textWrap: true,
+			editorRenderer: "dom",
+			canvasBackend: "auto",
+			canvasGutterMarkers: "shared",
+			canvasMagnifier: true,
+			stickyScroll: false,
+			stickyScrollMaxLines: 5,
+			cursorBlinkRate: 1200,
+			textWrap: false,
+			wrappingIndent: "same",
 			softTab: true,
 			tabSize: 2,
 			retryRemoteFsAfterFail: true,
@@ -140,21 +150,34 @@ class Settings {
 			fadeFoldWidgets: false,
 			autoCorrect: true,
 			openFileListPos: this.OPEN_FILE_LIST_POS_HEADER,
-			quickTools: this.#IS_TABLET ? 0 : 1,
+			quickTools: 2,
 			quickToolsTriggerMode: this.QUICKTOOLS_TRIGGER_MODE_TOUCH,
 			appFont: "",
 			editorFont: "Roboto Mono",
 			vibrateOnTap: true,
 			fullscreen: false,
-			floatingButton: !this.#IS_TABLET,
+			floatingButton: false,
 			liveAutoCompletion: true,
+			localWordCompletion: true,
+			languageCompletion: true,
+			recommendExtensions: true,
+			useEmmet: true,
+			autoIndent: true,
+			codeFolding: true,
+			autoCloseBrackets: true,
+			bracketMatching: true,
+			highlightActiveLine: true,
+			highlightSelectionMatches: false,
 			autoCloseTags: true,
+			autoRenameTags: true,
 			showPrintMargin: false,
 			printMargin: 80,
 			scrollbarSize: 20,
+			scrollbarHeight: 50,
 			showSpaces: false,
 			confirmOnExit: true,
-			lineHeight: 2,
+			lineHeight: 1.4,
+			lineHeightMigrated: true,
 			leftMargin: 50,
 			checkFiles: true,
 			checkForAppUpdates: false,
@@ -165,16 +188,20 @@ class Settings {
 			rememberFolders: true,
 			diagonalScrolling: false,
 			reverseScrolling: false,
-			scrollSpeed: constants.SCROLL_SPEED_NORMAL,
+			scrollSpeed: config.SCROLL_SPEED_NORMAL,
+			scrollPastEnd: "medium",
 			customTheme: this.#customTheme,
 			relativeLineNumbers: false,
 			elasticTabstops: false,
 			rtlText: false,
-			hardWrap: false,
 			useTextareaForIME: false,
 			touchMoveThreshold: Math.round((1 / devicePixelRatio) * 10) / 20,
-			quicktoolsItems: [...Array(this.#QUICKTOOLS_SIZE).keys()],
+			quicktoolsItems: [
+				2, 1, 5, 3, 4, 18, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 33, 21, 20,
+				16, 19, 17, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+			],
 			excludeFolders: this.#excludeFolders,
+			useFileOperationExclusions: true,
 			defaultFileEncoding: "UTF-8",
 			inlineAutoCompletion: true,
 			colorPreview: true,
@@ -189,9 +216,18 @@ class Settings {
 			pluginsDisabled: {}, // pluginId: true/false
 			lsp: {
 				servers: {},
+				allowNonTerminalWorkspace: false,
+				runtime: {
+					default: "auto",
+					servers: {},
+					workspaces: {},
+				},
 			},
 			developerMode: false,
-			shiftClickSelection: false,
+			shiftClickSelection: true,
+			showShareButton: true,
+			appIcon: "default",
+			iconTheme: "builtin",
 		};
 		this.value = structuredClone(this.#defaultSettings);
 	}
@@ -219,6 +255,15 @@ class Settings {
 
 		const settings = helpers.parseJSON(await fs.readFile("utf8"));
 		if (settings) {
+			// The old default line height (2) never reached the editor's lines
+			// (CodeMirror's 1.4 won), so nobody saw it. Now that it applies,
+			// keep what the editor showed instead of doubling line spacing.
+			if (
+				settings.lineHeightMigrated === undefined &&
+				settings.lineHeight === 2
+			)
+				settings.lineHeight = 1.4;
+
 			// make sure that all the settings are present
 			Object.keys(this.#defaultSettings).forEach((setting) => {
 				const value = settings[setting];
@@ -248,16 +293,21 @@ class Settings {
 	}
 
 	async #save() {
-		const fs = fsOperation(this.settingsFile);
-		const settingsText = JSON.stringify(this.value, undefined, 4);
+		try {
+			const fs = fsOperation(this.settingsFile);
+			const settingsText = JSON.stringify(this.value, undefined, 4);
 
-		if (!(await fs.exists())) {
-			const dirFs = fsOperation(DATA_STORAGE);
-			await dirFs.createFile("settings.json");
+			if (!(await fs.exists())) {
+				const dirFs = fsOperation(DATA_STORAGE);
+				await dirFs.createFile("settings.json");
+			}
+
+			await fs.writeFile(settingsText);
+			this.#oldSettings = structuredClone(this.value);
+		} catch (error) {
+			toast(strings["settings save failed"] || "Settings save failed");
+			console.error("Settings save failed:", error);
 		}
-
-		await fs.writeFile(settingsText);
-		this.#oldSettings = structuredClone(this.value);
 	}
 
 	/**
@@ -294,7 +344,6 @@ class Settings {
 		});
 
 		if (saveFile) await this.#save();
-		if (showToast) toast(strings["settings saved"]);
 
 		changedSettings.forEach((setting) => {
 			const listeners = this.#on[`update:${setting}:after`];

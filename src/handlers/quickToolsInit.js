@@ -1,10 +1,18 @@
+import { redoDepth, undoDepth } from "@codemirror/commands";
+import { focusEditorIfEditable } from "cm/editorReadOnly";
 import quickTools from "components/quickTools";
-import constants from "lib/constants";
+import { description } from "components/quickTools/items";
+import { hideTooltip, showTooltip } from "components/tooltip";
+import config from "lib/config";
+import { syncQuickToolsVisibility } from "lib/editorFile";
+import quickToolsAdapters from "lib/quickToolsAdapter";
+import { watchQuickToolsOverlays } from "lib/quickToolsOverlays";
 import appSettings from "lib/settings";
-import actions, { key } from "./quickTools";
+import actions, { cancelQuickToolsModifierInput, key } from "./quickTools";
 
 const CONTEXT_MENU_TIMEOUT = 500;
 const MOVE_X_THRESHOLD = 50;
+const TOUCH_EVENT_OPTIONS = { passive: false };
 
 let time;
 let moveX;
@@ -16,6 +24,7 @@ let startTime;
 let contextmenuTimeout;
 let active = false; // is button already active
 let slide = 0;
+let longPress = false;
 
 /**@type {HTMLElement} */
 let $row;
@@ -25,6 +34,7 @@ let timeout;
 let $touchstart;
 
 function reset() {
+	clearTouchFeedback();
 	moveX = 0;
 	movedX = 0;
 	time = 300;
@@ -34,6 +44,19 @@ function reset() {
 	touchMoved = undefined;
 	contextmenuTimeout = null;
 	active = false;
+	longPress = false;
+}
+
+function clearTouchFeedback() {
+	if ($touchstart && !active) {
+		$touchstart.classList.remove("active");
+	}
+}
+
+function discardAdapterCapture() {
+	// Modifier sequences keep their selection until a key is dispatched.
+	if (!key.shift && !key.ctrl && !key.alt && !key.meta)
+		quickToolsAdapters.discardCapture();
 }
 
 /**
@@ -42,10 +65,59 @@ function reset() {
  */
 export default function init() {
 	const { $footer, $toggler, $input } = quickTools;
+	let adapterWasActive = false,
+		visible;
+	const refreshAdapter = () => {
+		const hasAdapter = quickToolsAdapters.has();
+		if (!hasAdapter && !adapterWasActive) {
+			visible = undefined;
+			return;
+		}
+		adapterWasActive = hasAdapter;
+		const nextVisible = quickToolsAdapters.visible();
+		if (visible !== nextVisible) {
+			visible = nextVisible;
+			syncQuickToolsVisibility(editorManager.activeFile);
+		}
+		updateHistoryButtons();
+	};
+	const clearAdapterInput = ({ preserveCapture = false } = {}) => {
+		clearTimeout(timeout);
+		touchcancel(undefined, { preserveCapture });
+		reset();
+		cancelQuickToolsModifierInput({ preserveCapture });
+	};
+	quickToolsAdapters.subscribe((change) => {
+		if (change?.cancelled && change.tab === editorManager.activeFile)
+			clearAdapterInput();
+		refreshAdapter();
+	});
+	watchQuickToolsOverlays(quickToolsAdapters, clearAdapterInput);
+	const capture = () => {
+		discardAdapterCapture();
+		quickToolsAdapters.capture();
+	};
+	$footer.addEventListener("pointerdown", capture, true);
+	$footer.addEventListener("keydown", capture, true);
+	$footer.addEventListener("pointercancel", discardAdapterCapture, true);
+	$footer.addEventListener("scroll", discardAdapterCapture, true);
+	const leaveQuickTools = (event) => {
+		if (!quickToolsAdapters.has()) return;
+		const path = event.composedPath();
+		if (path.includes($footer) || path.includes($input)) return;
+		quickToolsAdapters.discardCapture();
+		if (key.shift || key.ctrl || key.alt || key.meta)
+			cancelQuickToolsModifierInput();
+	};
+	document.addEventListener("pointerdown", leaveQuickTools, true);
+	document.addEventListener("focusin", leaveQuickTools, true);
 
 	$toggler.addEventListener("click", (e) => {
 		e.preventDefault();
 		e.stopPropagation();
+		if (appSettings.value.vibrateOnTap) {
+			navigator.vibrate(config.VIBRATION_TIME);
+		}
 		actions("toggle");
 	});
 
@@ -69,20 +141,42 @@ export default function init() {
 		else $footer.removeAttribute("data-meta");
 	});
 
-	editorManager.on(["file-content-changed", "switch-file"], () => {
-		if (editorManager.activeFile?.isUnsaved) {
-			$footer.setAttribute("data-unsaved", "true");
-		} else {
-			$footer.removeAttribute("data-unsaved");
-		}
-	});
+	editorManager.on(
+		[
+			"file-content-changed",
+			"switch-file",
+			"new-file",
+			"file-loaded",
+			"remove-file",
+		],
+		scheduleUpdateQuickToolsState,
+	);
 
 	editorManager.on("save-file", () => {
-		$footer.removeAttribute("data-unsaved");
+		scheduleUpdateQuickToolsState();
 	});
 
-	root.append($footer, $toggler);
+	editorManager.on("editor-state-changed", updateHistoryButtons);
+	editorManager.on("switch-file", () => {
+		// activeFile already points to the incoming tab. Only sync cancels the
+		// outgoing adapter; UI cleanup must preserve the incoming selection.
+		if (adapterWasActive || quickToolsAdapters.has())
+			clearAdapterInput({ preserveCapture: true });
+		else cancelQuickToolsModifierInput();
+		quickToolsAdapters.sync();
+	});
+
+	appSettings.on("update:quicktoolsItems:after", () => {
+		setTimeout(updateHistoryButtons, 100);
+	});
+
+	root.append($footer);
+	if (appSettings.value.floatingButton) {
+		root.appendOuter($toggler);
+	}
 	document.body.append($input);
+	scheduleUpdateQuickToolsState();
+
 	if (
 		appSettings.value.quickToolsTriggerMode ===
 		appSettings.QUICKTOOLS_TRIGGER_MODE_CLICK
@@ -92,7 +186,7 @@ export default function init() {
 		$footer.addEventListener("contextmenu", oncontextmenu, true);
 		$footer.addEventListener("wheel", onwheel, { passive: false });
 	} else {
-		$footer.addEventListener("touchstart", touchstart);
+		$footer.addEventListener("touchstart", touchstart, TOUCH_EVENT_OPTIONS);
 		$footer.addEventListener("keydown", touchstart);
 	}
 
@@ -108,13 +202,14 @@ export default function init() {
 			$footer.removeEventListener("click", onclick);
 			$footer.removeEventListener("wheel", onwheel);
 			$footer.addEventListener("keydown", touchstart);
-			$footer.addEventListener("touchstart", touchstart);
+			$footer.addEventListener("touchstart", touchstart, TOUCH_EVENT_OPTIONS);
 		}
 	});
 }
 
 function onwheel(e) {
 	e.preventDefault();
+	discardAdapterCapture();
 	const $el = e.target;
 	const { $row1, $row2 } = quickTools;
 	let $row;
@@ -133,9 +228,17 @@ function onwheel(e) {
 function onclick(e) {
 	reset();
 
+	if (e.target.disabled) {
+		discardAdapterCapture();
+		e.preventDefault();
+		e.stopPropagation();
+		return;
+	}
+
 	e.preventDefault();
 	e.stopPropagation();
 	click(e.target);
+	hideTooltip();
 	clearTimeout(timeout);
 }
 
@@ -146,19 +249,28 @@ function touchstart(e) {
 	if ($el instanceof HTMLInputElement) {
 		return;
 	}
+	if ($el.disabled) {
+		e.preventDefault();
+		e.stopPropagation();
+		return;
+	}
 
 	startTime = performance.now();
 	$touchstart = $el;
 	e.preventDefault();
 	e.stopPropagation();
 
-	if ($el.dataset.repeat === "true") {
-		contextmenuTimeout = setTimeout(() => {
-			if (touchMoved) return;
+	contextmenuTimeout = setTimeout(() => {
+		if (touchMoved) return;
+
+		longPress = true;
+		showTooltip($el, description($el.dataset.id));
+
+		if ($el.dataset.repeat === "true") {
 			contextmenu = true;
 			oncontextmenu(e);
-		}, CONTEXT_MENU_TIMEOUT);
-	}
+		}
+	}, CONTEXT_MENU_TIMEOUT);
 
 	if ($el.classList.contains("active")) {
 		active = true;
@@ -254,20 +366,19 @@ function touchend(e) {
 		}
 
 		$row.scrollLeft = scroll;
-		touchcancel(e);
-
-		if ($el === $touchstart && performance.now() - startTime < 100) {
-			click($el);
-		}
+		const shouldClick =
+			$el === $touchstart && performance.now() - startTime < 100;
+		touchcancel(e, { preserveCapture: shouldClick });
+		if (shouldClick) click($el);
 		return;
 	}
 
-	if ($touchstart !== $el || contextmenu) {
+	if ($touchstart !== $el || contextmenu || longPress) {
 		touchcancel(e);
 		return;
 	}
 
-	touchcancel(e);
+	touchcancel(e, { preserveCapture: true });
 	click($el);
 }
 
@@ -275,14 +386,16 @@ function touchend(e) {
  *
  * @param {TouchEvent} e
  */
-function touchcancel(e) {
+function touchcancel(e, { preserveCapture = false } = {}) {
 	document.removeEventListener("keyup", touchcancel);
 	document.removeEventListener("touchend", touchend);
 	document.removeEventListener("touchcancel", touchcancel);
 	document.removeEventListener("touchmove", touchmove);
 	clearTimeout(timeout);
 	clearTimeout(contextmenuTimeout);
-	if (!active) $touchstart.classList.remove("active");
+	clearTouchFeedback();
+	hideTooltip();
+	if (!preserveCapture) discardAdapterCapture();
 }
 
 /**
@@ -300,7 +413,7 @@ function oncontextmenu(e) {
 	const { editor, activeFile } = editorManager;
 
 	if (isClickMode && appSettings.value.vibrateOnTap) {
-		navigator.vibrate(constants.VIBRATION_TIME_LONG);
+		navigator.vibrate(config.VIBRATION_TIME_LONG);
 		$el.classList.add("active");
 	}
 
@@ -312,8 +425,8 @@ function oncontextmenu(e) {
 		timeout = setTimeout(dispatchEventWithTimeout, time);
 	};
 
-	if (activeFile.focused) {
-		editor.focus();
+	if (activeFile.focused && !quickToolsAdapters.has()) {
+		focusEditorIfEditable(editor);
 	}
 	dispatchEventWithTimeout();
 }
@@ -323,13 +436,26 @@ function oncontextmenu(e) {
  * @param {HTMLElement} $el
  */
 function click($el) {
+	if ($el.disabled) {
+		discardAdapterCapture();
+		return;
+	}
+
 	$el.classList.add("click");
 	clearTimeout($el.dataset.timeout);
 	$el.dataset.timeout = setTimeout(() => {
 		$el.classList.remove("click");
 	}, 300);
+
+	if (appSettings.value.vibrateOnTap) {
+		navigator.vibrate(config.VIBRATION_TIME);
+	}
+
 	const { action } = $el.dataset;
-	if (!action) return;
+	if (!action) {
+		discardAdapterCapture();
+		return;
+	}
 
 	let { value } = $el.dataset;
 
@@ -337,5 +463,61 @@ function click($el) {
 		value = $el.value;
 	}
 
-	actions(action, value);
+	try {
+		actions(action, value);
+	} finally {
+		discardAdapterCapture();
+	}
+}
+
+function scheduleUpdateQuickToolsState() {
+	setTimeout(updateQuickToolsState, 0);
+}
+
+function updateQuickToolsState() {
+	const { $footer } = quickTools;
+
+	if (editorManager.activeFile?.isUnsaved) {
+		$footer.setAttribute("data-unsaved", "true");
+	} else {
+		$footer.removeAttribute("data-unsaved");
+	}
+
+	updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+	if (quickToolsAdapters.has()) {
+		for (const command of ["undo", "redo"]) {
+			updateHistoryButton(
+				command,
+				!quickToolsAdapters.available({ type: "command", command }),
+			);
+		}
+		return;
+	}
+	const { editor, activeFile } = editorManager;
+	const disabled = !editor || activeFile?.type !== "editor";
+
+	updateHistoryButton("undo", disabled || undoDepth(editor.state) === 0);
+	updateHistoryButton("redo", disabled || redoDepth(editor.state) === 0);
+}
+
+function updateHistoryButton(id, disabled) {
+	const buttons = new Set();
+
+	for (const $container of [
+		quickTools.$footer,
+		quickTools.$row1,
+		quickTools.$row2,
+	]) {
+		$container?.querySelectorAll(`[data-id="${id}"]`)?.forEach(($button) => {
+			buttons.add($button);
+		});
+	}
+
+	buttons.forEach(($button) => {
+		$button.disabled = disabled;
+		$button.setAttribute("aria-disabled", String(disabled));
+	});
 }

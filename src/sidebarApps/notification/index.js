@@ -1,13 +1,11 @@
-import NotificationManager from "lib/notificationManager";
 import "./style.scss";
 import Sidebar from "components/sidebar";
+import notificationManager from "lib/notificationManager";
 
 /**@type {HTMLElement} */
 let container;
 /** @type {HTMLElement} */
 let $notificationContainer = null;
-
-let notificationManager;
 
 export default [
 	"notifications", // icon
@@ -25,9 +23,11 @@ const $header = (
 			<button
 				type="button"
 				className="icon-button"
+				title={strings["clear all"]}
+				aria-label={strings["clear all"]}
 				onclick={() => notificationManager.clearAll()}
 			>
-				<span data-action="clear" className="icon clearclose"></span>
+				<span data-action="clear" className="icon delete_outline"></span>
 			</button>
 		</div>
 	</div>
@@ -46,8 +46,6 @@ function initApp(el) {
 	);
 	container.append($notificationContainer);
 
-	notificationManager = new NotificationManager();
-
 	Sidebar.on("show", onSelected);
 }
 
@@ -56,6 +54,8 @@ function initApp(el) {
  * @param {HTMLElement} el
  */
 function onSelected(el) {
+	// Sidebar "show" fires for every app; only mark read when this one is open
+	if (container.isConnected) notificationManager.markAllRead();
 	const $scrollableLists = container.getAll(":scope .scroll[data-scroll-top]");
 	$scrollableLists.forEach(($el) => {
 		$el.scrollTop = $el.dataset.scrollTop;

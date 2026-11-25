@@ -1,6 +1,8 @@
 import fsOperation from "fileSystem";
+import { Text } from "@codemirror/state";
 import alert from "dialogs/alert";
 import confirm from "dialogs/confirm";
+import helpers from "utils/helpers";
 
 let checkFileEnabled = true;
 
@@ -24,19 +26,12 @@ export default async function checkFiles() {
 	/** @type {{ editor: import('@codemirror/view').EditorView }} */
 	const { editor } = editorManager;
 
-	recursiveFileCheck([...files]);
-
-	/**
-	 * Checks if the file has been changed
-	 * @param {EditorFile[]} files List of files to check
-	 */
-	async function recursiveFileCheck(files) {
-		const file = files.pop();
-		await checkFile(file);
-		if (files.length) {
-			recursiveFileCheck(files);
+	for (const file of [...files].reverse()) {
+		try {
+			await checkFile(file);
+		} catch (error) {
+			console.warn("Failed to check file", error);
 		}
-		return;
 	}
 
 	/**
@@ -49,12 +44,14 @@ export default async function checkFiles() {
 	 * @returns {Promise<void>}
 	 */
 	async function checkFile(file) {
-		if (file === undefined || file.isUnsaved || !file.loaded || file.loading)
+		if (file?.type !== "editor" || !file.tab || !file.loaded || file.loading)
 			return;
 
 		if (file.uri) {
 			const fs = fsOperation(file.uri);
-			const exists = await fs.exists();
+			if (!fs) return;
+			const exists = fs.exists ? await fs.exists() : true;
+			if (!file.tab) return;
 
 			if (!exists && !file.readOnly) {
 				file.isUnsaved = true;
@@ -71,27 +68,69 @@ export default async function checkFiles() {
 				return;
 			}
 
-			const text = await fs.readFile(file.encoding);
-			const loadedText = file.session.doc.toString();
+			let mtime = null;
+			if (file.hasVersionMetadata && file.savedMtime != null) {
+				const stat = await fs.stat?.().catch(() => null);
+				if (!file.tab) return;
+				mtime = helpers.getStatMtime(stat);
+				if (mtime != null) {
+					if (mtime === file.savedMtime) return;
+					const alreadyWarnedConflict =
+						file.hasDiskConflict && file.diskMtime === mtime;
+					file.markDiskChanged({ mtime });
+					if (file.hasDiskConflict) {
+						editorManager.onupdate("file-changed");
+						editorManager.emit("update", "file-changed");
+						console.warn(
+							`File changed on disk while unsaved: ${file.filename}`,
+						);
+						if (!alreadyWarnedConflict) {
+							await new Promise((resolve) => {
+								alert(
+									strings.warning,
+									`${file.filename} changed on disk while you have unsaved edits. Saving now may overwrite the external changes.`,
+									resolve,
+								);
+							});
+						}
+						return;
+					}
+				}
+			}
 
-			if (text !== loadedText) {
+			if (file.isUnsaved) return;
+
+			const text = await fs.readFile(file.encoding);
+			if (!file.tab) return;
+			const diskDoc = Text.of(String(text ?? "").split("\n"));
+			const currentDoc = file.session?.doc;
+
+			if (!currentDoc?.eq?.(diskDoc)) {
 				try {
 					const confirmation = await confirm(
-						strings.warning.toUpperCase(),
+						strings.warning,
 						file.filename + strings["file changed"],
 					);
 
-					if (!confirmation) return;
+					if (!confirmation || !file.tab) return;
 
 					const cursorPos = editor.getCursorPosition();
 					editorManager.getFile(file.id, "id")?.makeActive();
 
 					file.markChanged = false;
-					file.session.setValue(text);
+					try {
+						file.session.setValue(text);
+						file.markLoaded({ mtime });
+					} finally {
+						file.markChanged = true;
+					}
+					await file.flushCacheWrite();
 					editor.gotoLine(cursorPos.row, cursorPos.column);
 				} catch (error) {
 					// ignore
 				}
+			} else if (mtime != null && file.hasVersionMetadata) {
+				file.markLoaded({ mtime });
 			}
 		}
 	}

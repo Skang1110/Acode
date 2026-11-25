@@ -4,7 +4,7 @@ import toast from "components/toast";
 import alert from "dialogs/alert";
 import confirm from "dialogs/confirm";
 import loader from "dialogs/loader";
-import constants from "lib/constants";
+import config from "lib/config";
 import appSettings from "lib/settings";
 import FileBrowser from "pages/fileBrowser";
 import helpers from "utils/helpers";
@@ -318,12 +318,12 @@ function backupRestore() {
 				`<strong>${strings.plugins || "Plugins"}:</strong> ${installedPlugins.length}`,
 			].join("<br>");
 
-			alert(strings.success.toUpperCase(), message);
+			alert(strings.success, message);
 		} catch (error) {
 			loaderDialog.destroy();
 			console.error("Backup error:", error);
 			alert(
-				strings.error.toUpperCase(),
+				strings.error,
 				`${strings["error details"] || "Error"}: ${error.message || error}`,
 			);
 		}
@@ -373,7 +373,7 @@ backupRestore.restore = async function (url) {
 			backup = JSON.parse(backupContent);
 		} catch (error) {
 			loaderDialog.destroy();
-			alert(strings.error.toUpperCase(), strings["invalid backup file"]);
+			alert(strings.error, strings["invalid backup file"]);
 			return;
 		}
 
@@ -389,7 +389,7 @@ backupRestore.restore = async function (url) {
 				`${strings["issues found"]}:`,
 				...validation.errors.map((e) => `• ${e}`),
 			].join("\n");
-			alert(strings.error.toUpperCase(), errorMessage);
+			alert(strings.error, errorMessage);
 			return;
 		}
 
@@ -519,7 +519,7 @@ backupRestore.restore = async function (url) {
 						}
 					} else {
 						// Remote plugin case - fetch from API
-						const pluginUrl = Url.join(constants.API_BASE, `plugin/${id}`);
+						const pluginUrl = Url.join(config.API_BASE, `plugin/${id}`);
 						let remotePlugin = null;
 
 						try {
@@ -689,10 +689,7 @@ backupRestore.restore = async function (url) {
 	} catch (err) {
 		loaderDialog.destroy();
 		console.error("Restore error:", err);
-		alert(
-			strings.error.toUpperCase(),
-			`${strings["error details"]}: ${err.message || err}`,
-		);
+		alert(strings.error, `${strings["error details"]}: ${err.message || err}`);
 	}
 };
 

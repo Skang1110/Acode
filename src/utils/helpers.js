@@ -1,56 +1,15 @@
 import fsOperation from "fileSystem";
-import ajax from "@deadlyjack/ajax";
-import { getModeForPath as getCMModeForPath } from "cm/modelist";
 import alert from "dialogs/alert";
 import escapeStringRegexp from "escape-string-regexp";
 import adRewards from "lib/adRewards";
-import constants from "lib/constants";
+import config from "lib/config";
+import fileIcons from "lib/fileIcons";
+import { interstitialAd, requestBannerForPage } from "lib/startAd";
+import { isBinaryFile } from "./binaryExtensions";
+import { isPlayStoreInstall } from "./installSource";
 import path from "./Path";
 import Uri from "./Uri";
 import Url from "./Url";
-
-/**
- * Gets programming language name according to filename
- * @param {String} filename
- * @returns
- */
-function getFileType(filename) {
-	const regex = {
-		babel: /\.babelrc$/i,
-		jsmap: /\.js\.map$/i,
-		yarn: /^yarn\.lock$/i,
-		testjs: /\.test\.js$/i,
-		testts: /\.test\.ts$/i,
-		cssmap: /\.css\.map$/i,
-		typescriptdef: /\.d\.ts$/i,
-		clojurescript: /\.cljs$/i,
-		cppheader: /\.(hh|hpp)$/i,
-		jsconfig: /^jsconfig.json$/i,
-		tsconfig: /^tsconfig.json$/i,
-		android: /\.(apk|aab|slim)$/i,
-		jsbeautify: /^\.jsbeautifyrc$/i,
-		webpack: /^webpack\.config\.js$/i,
-		audio: /\.(mp3|wav|ogg|flac|aac)$/i,
-		git: /(^\.gitignore$)|(^\.gitmodules$)/i,
-		video: /\.(mp4|m4a|mov|3gp|wmv|flv|avi)$/i,
-		image: /\.(png|jpg|jpeg|gif|bmp|ico|webp)$/i,
-		npm: /(^package\.json$)|(^package\-lock\.json$)/i,
-		compressed: /\.(zip|rar|7z|tar|gz|gzip|dmg|iso)$/i,
-		eslint:
-			/(^\.eslintrc(\.(json5?|ya?ml|toml))?$|eslint\.config\.(c?js|json)$)/i,
-		postcssconfig:
-			/(^\.postcssrc(\.(json5?|ya?ml|toml))?$|postcss\.config\.(c?js|json)$)/i,
-		prettier:
-			/(^\.prettierrc(\.(json5?|ya?ml|toml))?$|prettier\.config\.(c?js|json)$)/i,
-	};
-
-	const fileType = Object.keys(regex).find((type) =>
-		regex[type].test(filename),
-	);
-	if (fileType) return fileType;
-
-	return Url.extname(filename).substring(1);
-}
 
 export default {
 	/**
@@ -75,20 +34,20 @@ export default {
 	 * @param {string} filename
 	 */
 	getIconForFile(filename) {
-		const type = getFileType(filename);
-		// Use CodeMirror's modelist to determine mode name
-		let modeName = "text";
-		try {
-			const mode = getCMModeForPath?.(filename);
-			modeName = mode?.name || modeName;
-		} catch (e) {
-			// fallback to default if CodeMirror modelist isn't available yet
-		}
-
-		const iconForMode = `file_type_${modeName}`;
-		const iconForType = `file_type_${type}`;
-
-		return `file file_type_default ${iconForMode} ${iconForType}`;
+		return fileIcons.icon({ kind: "file", name: filename });
+	},
+	/**
+	 * Gets icon according to folder name and expansion state
+	 * @param {string} name
+	 * @param {{expanded?: boolean, isRoot?: boolean}} [options]
+	 */
+	getIconForFolder(name, options = {}) {
+		return fileIcons.icon({
+			kind: "folder",
+			name,
+			expanded: options.expanded,
+			isRoot: options.isRoot,
+		});
 	},
 	/**
 	 *
@@ -121,7 +80,9 @@ export default {
 				}
 			}
 			if (item.isDirectory) {
-				item.icon = "folder";
+				item.icon = this.getIconForFolder(item.name, {
+					isRoot: item.isRoot,
+				});
 			} else {
 				if (mode === "folder") {
 					item.disabled = true;
@@ -167,6 +128,36 @@ export default {
 		return msg + (extra ? "<br>" + extra : "");
 	},
 	/**
+	 * Maps common native errors (e.g. revoked SAF permissions) to a message
+	 * people can act on. Returns null when the error isn't recognised.
+	 * @param {string} msg
+	 * @returns {string|null}
+	 */
+	friendlyErrorMessage(msg) {
+		if (typeof msg !== "string") return null;
+		if (
+			/Permission Denial|ACTION_OPEN_DOCUMENT|SecurityException|EACCES/i.test(
+				msg,
+			)
+		) {
+			return strings["error-permission-revoked"];
+		}
+		if (/FileNotFoundException|ENOENT|No such file or directory/i.test(msg)) {
+			return strings["error-not-found"];
+		}
+		if (/ENOSPC|No space left on device/i.test(msg)) {
+			return strings["error-no-space"];
+		}
+		if (
+			/UnknownHostException|ConnectException|SocketTimeoutException|ECONNREFUSED|ETIMEDOUT/i.test(
+				msg,
+			)
+		) {
+			return strings["error-network"];
+		}
+		return null;
+	},
+	/**
 	 *
 	 * @param {Error} err
 	 * @param  {...string} args
@@ -183,7 +174,16 @@ export default {
 			if (hide) hide();
 		};
 
-		const msg = this.errorMessage(err, ...args);
+		let msg = this.errorMessage(err, ...args);
+		const base = this.errorMessage(err);
+		const friendly = this.friendlyErrorMessage(base);
+		if (friendly) {
+			// Keep the raw native message for bug reports, but out of the way
+			const raw = document.createElement("div");
+			raw.textContent = base;
+			const extra = msg.slice(base.length);
+			msg = `${friendly}${extra}<details class="error-details"><summary>${strings["error details"]}</summary><code>${raw.innerHTML}</code></details>`;
+		}
 		alert(strings.error, msg, onhide);
 
 		return new Promise((resolve) => {
@@ -289,12 +289,16 @@ export default {
 		editorManager.emit("update", "file-delete");
 	},
 	canShowAds() {
-		return Boolean(IS_FREE_VERSION && adRewards.canShowAds());
+		return Boolean(!config.HAS_PRO && adRewards.canShowAds());
 	},
 	async showInterstitialIfReady() {
 		if (!this.canShowAds()) return false;
-		if (await window.iad?.isLoaded()) {
-			window.iad.show();
+		if (
+			typeof interstitialAd?.isLoaded === "function" &&
+			typeof interstitialAd?.show === "function" &&
+			(await interstitialAd?.isLoaded())
+		) {
+			interstitialAd.show();
 			return true;
 		}
 		return false;
@@ -303,13 +307,12 @@ export default {
 	 * Displays ad on the current page
 	 */
 	showAd() {
-		const { ad } = window;
-		if (this.canShowAds() && innerHeight * devicePixelRatio > 600 && ad) {
-			const $page = tag.getAll("wc-page:not(#root)").pop();
-			if ($page) {
-				ad.active = true;
-				ad.show();
-			}
+		if (!this.canShowAds()) return;
+		if (innerHeight * devicePixelRatio <= 600) return;
+
+		const $page = tag.getAll("wc-page:not(#root)").pop();
+		if ($page) {
+			requestBannerForPage($page);
 		}
 	},
 	async toInternalUri(uri) {
@@ -330,8 +333,8 @@ export default {
 	},
 	async checkAPIStatus() {
 		try {
-			const { status } = await ajax.get(Url.join(constants.API_BASE, "status"));
-			return status === "ok";
+			const res = await fetch(Url.join(config.API_BASE, "status"));
+			return res.ok;
 		} catch (error) {
 			window.log("error", error);
 			return false;
@@ -467,6 +470,7 @@ export default {
 			};
 		};
 		let firstCreatedPath = null;
+		let firstCreatedParentUri = null;
 		let firstCreatedType = null;
 		let firstTargetUri = uri;
 
@@ -491,6 +495,7 @@ export default {
 
 			if (entry.created && firstCreatedPath === null) {
 				firstCreatedPath = entry.url;
+				firstCreatedParentUri = currentUri;
 				firstCreatedType = expectedType;
 			}
 
@@ -499,6 +504,7 @@ export default {
 
 		return {
 			uri: firstCreatedPath || firstTargetUri,
+			parentUri: firstCreatedParentUri || uri,
 			created: Boolean(firstCreatedPath),
 			type:
 				firstCreatedType || (isFile && parts.length === 1 ? "file" : "folder"),
@@ -519,58 +525,29 @@ export default {
 
 		return `${trimmedCountStr}${units[index]}`;
 	},
+	normalizeMtime(value) {
+		if (value == null) return null;
+		const time = value instanceof Date ? value.getTime() : Number(value);
+		return Number.isFinite(time) ? time : null;
+	},
+	getStatMtime(stat) {
+		return this.normalizeMtime(
+			stat?.modifiedDate ?? stat?.lastModified ?? stat?.mtime,
+		);
+	},
 	isBinary(file) {
-		// binary file extensions
-		const binaryExtensions = [
-			"exe",
-			"dll",
-			"so",
-			"dylib",
-			"bin",
-			"o",
-			"apk",
-			"aab",
-			"zip",
-			"rar",
-			"7z",
-			"gz",
-			"tar",
-			"tgz",
-			"jpg",
-			"jpeg",
-			"png",
-			"gif",
-			"bmp",
-			"ico",
-			"mp3",
-			"mp4",
-			"wav",
-			"avi",
-			"mov",
-			"dds",
-			"tga",
-			"swf",
-			"ttf",
-			"eot",
-			"otf",
-			"woff",
-			"woff2",
-			"pdf",
-			"doc",
-			"docx",
-			"xls",
-			"xlsx",
-			"class",
-			"pyc",
-			"jar",
-			"war",
-		];
+		return isBinaryFile(file);
+	},
 
-		const extension = Url.basename(file)?.split(".")?.pop()?.toLowerCase();
+	isIapAvailable() {
+		return (
+			typeof iap !== "undefined" &&
+			typeof iap.isIapAvailable === "function" &&
+			iap.isIapAvailable()
+		);
+	},
 
-		if (extension && binaryExtensions.includes(extension)) {
-			return true;
-		}
-		return false;
+	shouldAllowExternalPurchase() {
+		return !this.isIapAvailable() && !isPlayStoreInstall();
 	},
 };

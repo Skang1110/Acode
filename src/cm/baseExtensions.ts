@@ -1,7 +1,13 @@
-import { closeBrackets, completionKeymap } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import {
+	acceptCompletion,
+	closeBrackets,
+	closeBracketsKeymap,
+	completionKeymap,
+} from "@codemirror/autocomplete";
+import { history } from "@codemirror/commands";
 import {
 	bracketMatching,
+	codeFolding as codeFoldingState,
 	defaultHighlightStyle,
 	foldGutter,
 	indentOnInput,
@@ -9,11 +15,12 @@ import {
 } from "@codemirror/language";
 import { highlightSelectionMatches } from "@codemirror/search";
 import type { Extension } from "@codemirror/state";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Prec } from "@codemirror/state";
 import {
 	crosshairCursor,
 	drawSelection,
 	dropCursor,
+	EditorView,
 	highlightActiveLine,
 	highlightActiveLineGutter,
 	highlightSpecialChars,
@@ -21,28 +28,108 @@ import {
 	rectangularSelection,
 	tooltips,
 } from "@codemirror/view";
+import indentationFolding from "./indentationFolding";
+
+export interface BaseExtensionOptions {
+	autoIndent?: boolean;
+	codeFolding?: boolean;
+	/**
+	 * Show CodeMirror's fold gutter with code folding. The canvas renderer
+	 * draws its own fold markers, so it only needs the folding state.
+	 */
+	foldGutter?: boolean;
+	/**
+	 * The canvas renderer draws the selection, cursors, drop cursor, active
+	 * line (and its gutter) and special characters itself, so those
+	 * extensions are left out.
+	 */
+	canvas?: boolean;
+	autoCloseBrackets?: boolean;
+	bracketMatching?: boolean;
+	highlightActiveLine?: boolean;
+	highlightSelectionMatches?: boolean;
+}
+
+/**
+ * Android draws its native selection handles for a DOM selection inside
+ * the editor even after focus moves to a menu or page over it, so they
+ * float above the ⋮ menu or Settings and can still be dragged there
+ * (Acode issue #3059). Focus leaving the editor doesn't clear the DOM
+ * selection, so this does. With `drawSelection()` the visible selection
+ * is CodeMirror's own layer and stays; CodeMirror writes the DOM selection
+ * again from its state when the editor gets focus back.
+ */
+const releaseNativeSelection = EditorView.domEventHandlers({
+	blur(_event, view) {
+		// Focus leaving the app (backgrounded) keeps it as it was.
+		if (!document.hasFocus()) return false;
+		const selection = document.getSelection();
+		if (
+			selection?.rangeCount &&
+			view.contentDOM.contains(selection.anchorNode)
+		) {
+			selection.removeAllRanges();
+		}
+		return false;
+	},
+});
 
 /**
  * Base extensions roughly matching the useful parts of CodeMirror's basicSetup
  */
-export default function createBaseExtensions(): Extension[] {
-	return [
-		highlightActiveLineGutter(),
-		highlightSpecialChars(),
-		history(),
-		foldGutter(),
-		drawSelection(),
-		dropCursor(),
-		EditorState.allowMultipleSelections.of(true),
-		indentOnInput(),
+export default function createBaseExtensions(
+	options: BaseExtensionOptions = {},
+): Extension[] {
+	const {
+		autoIndent = true,
+		codeFolding = true,
+		foldGutter: showFoldGutter = true,
+		canvas = false,
+		autoCloseBrackets = true,
+		bracketMatching: enableBracketMatching = true,
+		highlightActiveLine: enableHighlightActiveLine = true,
+		highlightSelectionMatches: enableHighlightSelectionMatches = true,
+	} = options;
+	const extensions: Extension[] = [history()];
+	if (!canvas) extensions.push(highlightSpecialChars());
+
+	if (enableHighlightActiveLine && !canvas) {
+		extensions.push(highlightActiveLineGutter());
+	}
+	if (codeFolding) {
+		extensions.push(
+			showFoldGutter ? foldGutter() : codeFoldingState(),
+			indentationFolding,
+		);
+	}
+	if (!canvas) {
+		extensions.push(drawSelection(), dropCursor(), releaseNativeSelection);
+	}
+	extensions.push(EditorState.allowMultipleSelections.of(true));
+	if (autoIndent) extensions.push(indentOnInput());
+	extensions.push(
 		syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-		bracketMatching(),
-		closeBrackets(),
-		rectangularSelection(),
-		crosshairCursor(),
-		highlightActiveLine(),
-		highlightSelectionMatches(),
-		keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap]),
+	);
+	if (enableBracketMatching) extensions.push(bracketMatching());
+	if (autoCloseBrackets) extensions.push(closeBrackets());
+	extensions.push(rectangularSelection());
+	extensions.push(crosshairCursor());
+	if (enableHighlightActiveLine && !canvas) {
+		extensions.push(highlightActiveLine());
+	}
+	if (enableHighlightSelectionMatches) {
+		extensions.push(highlightSelectionMatches());
+	}
+	extensions.push(
+		Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion }])),
+	);
+	extensions.push(
+		keymap.of([
+			...(autoCloseBrackets ? closeBracketsKeymap : []),
+			...completionKeymap,
+		]),
+	);
+	extensions.push(
 		// This prevents tooltips from being going out of the editor area
 		tooltips({
 			tooltipSpace: (view) => {
@@ -55,5 +142,7 @@ export default function createBaseExtensions(): Extension[] {
 				};
 			},
 		}),
-	];
+	);
+
+	return extensions;
 }

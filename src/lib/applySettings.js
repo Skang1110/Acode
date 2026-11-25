@@ -1,7 +1,8 @@
+import quickTools from "../components/quickTools";
 import actions from "../handlers/quickTools";
 import appSettings from "../lib/settings";
 import themes from "../theme/list";
-import constants from "./constants";
+import config from "./config";
 import fonts from "./fonts";
 
 export default {
@@ -18,7 +19,7 @@ export default {
 		app.addEventListener("click", function (e) {
 			const $target = e.target;
 			if ($target.hasAttribute("vibrate") && appSettings.value.vibrateOnTap) {
-				navigator.vibrate(constants.VIBRATION_TIME);
+				navigator.vibrate(config.VIBRATION_TIME);
 			}
 		});
 
@@ -29,11 +30,29 @@ export default {
 	},
 	afterRender() {
 		const { value: settings } = appSettings;
-		if (!settings.floatingButton) {
-			root.classList.add("hide-floating-button");
+		const { $toggler } = quickTools;
+		const activeFile = editorManager.activeFile;
+		if (settings.floatingButton && !activeFile?.hideQuickTools) {
+			clearTimeout($toggler._hideTimeout);
+			$toggler._hideTimeout = null;
+			$toggler.classList.remove("hide");
+			if (!$toggler.isConnected) {
+				root.appendOuter($toggler);
+			}
+		} else {
+			clearTimeout($toggler._hideTimeout);
+			$toggler.classList.add("hide");
+			$toggler._hideTimeout = setTimeout(() => {
+				$toggler.remove();
+				$toggler._hideTimeout = null;
+			}, 300);
 		}
 
-		actions("set-height", settings.quickTools);
+		if (activeFile?.hideQuickTools) {
+			actions("set-height", { height: 0, save: false });
+		} else {
+			actions("set-height", settings.quickTools);
+		}
 		fonts.setAppFont(settings.appFont);
 		fonts.setEditorFont(settings.editorFont);
 		if (!themes.applied) {
