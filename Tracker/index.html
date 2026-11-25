@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="id">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Hidup Mudah & Bahagia - B6 Pro Max</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap");
+            body {
+                font-family: "Plus Jakarta Sans", sans-serif;
+                transition: 0.3s;
+            }
+            .dark {
+                background: #0f172a !important;
+                color: white;
+            }
+            .dark .bg-white {
+                background: #1e293b !important;
+                color: white;
+            }
+            .dark .border {
+                border-color: #334155 !important;
+            }
+            .dark input,
+            .dark textarea,
+            .dark select {
+                background: #0f172a !important;
+                color: white;
+            }
+        </style>
+    </head>
+    <body id="body" class="bg-[#FFF7ED] max-w-5xl mx-auto p-4 pb-24">
+        <!-- HEADER B6 -->
+        <header
+            class="bg-emerald-700 text-white rounded-3xl p-6 shadow-xl flex justify-between items-start"
+        >
+            <div>
+                <p
+                    class="text-emerald-200 text-[11px] font-bold tracking-widest"
+                >
+                    B6 • PRO MAX • CRUD + TRACKER
+                </p>
+                <h1 class="text-3xl font-extrabold leading-tight mt-1">
+                    Hidup Mudah<br />& Bahagia 🤲
+                </h1>
+                <p class="text-emerald-100 text-xs mt-2">
+                    Berbakti • Sedekah • Keluarga • Syukur • Sehat • Dzikir
+                </p>
+                <div class="mt-4 bg-white/15 rounded-2xl p-3">
+                    <div class="flex justify-between text-xs font-bold">
+                        <span>Progress Hari Ini</span
+                        ><span id="progressText">0%</span>
+                    </div>
+                    <div
+                        class="h-3 bg-black/20 rounded-full mt-2 overflow-hidden"
+                    >
+                        <div
+                            id="progressBar"
+                            class="h-full bg-amber-400"
+                            style="width: 0%"
+                        ></div>
+                    </div>
+                    <p class="text-[11px] mt-2">
+                        🔥 Streak: <b id="streak">0</b> •
+                        <span id="dateNow"></span>
+                    </p>
+                </div>
+            </div>
+            <button
+                onclick="toggleDark()"
+                class="bg-white/20 px-3 py-2 rounded-full text-sm font-bold shrink-0"
+            >
+                🌙 / ☀️
+            </button>
+        </header>
+
+        <!-- 3 TRACKER -->
+        <div class="grid grid-cols-3 gap-3 mt-4">
+            <div class="bg-white rounded-2xl p-4 text-center shadow">
+                <p class="text-[11px] font-bold text-slate-500">DZIKIR</p>
+                <p id="dzikirCount" class="text-3xl font-extrabold my-1">0</p>
+                <button
+                    onclick="tambahDzikir()"
+                    class="w-full bg-emerald-600 text-white py-2 rounded-xl text-xs font-bold"
+                >
+                    + Astaghfirullah</button
+                ><button
+                    onclick="resetDzikir()"
+                    class="text-[11px] mt-1 underline text-slate-400"
+                >
+                    Reset
+                </button>
+            </div>
+            <div class="bg-white rounded-2xl p-4 text-center shadow">
+                <p class="text-[11px] font-bold text-slate-500">SEDEKAH</p>
+                <p class="text-2xl font-extrabold my-1">
+                    Rp <span id="sedekahTotal">0</span>
+                </p>
+                <input
+                    id="inputSedekah"
+                    type="number"
+                    placeholder="Nominal"
+                    class="w-full border rounded-lg px-2 py-1.5 text-sm"
+                /><button
+                    onclick="tambahSedekah()"
+                    class="w-full bg-amber-500 text-white py-2 rounded-xl text-xs font-bold mt-2"
+                >
+                    + Catat
+                </button>
+            </div>
+            <div class="bg-white rounded-2xl p-4 text-center shadow">
+                <p class="text-[11px] font-bold text-slate-500">SYUKUR</p>
+                <p id="syukurCount" class="text-3xl font-extrabold my-1">0</p>
+                <input
+                    id="inputSyukur"
+                    placeholder="Aku bersyukur..."
+                    class="w-full border rounded-lg px-2 py-1.5 text-sm"
+                /><button
+                    onclick="tambahSyukur()"
+                    class="w-full bg-violet-600 text-white py-2 rounded-xl text-xs font-bold mt-2"
+                >
+                    + Simpan
+                </button>
+            </div>
+        </div>
+
+        <!-- GRAFIK MINGGUAN B6 -->
+        <div class="bg-white rounded-2xl p-4 shadow mt-4">
+            <div class="flex justify-between items-center">
+                <h3 class="font-extrabold">📊 Grafik Mingguan B6</h3>
+                <button
+                    onclick="simulasiMinggu()"
+                    class="text-xs bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-full font-bold"
+                >
+                    Simulasi Data 7 Hari
+                </button>
+            </div>
+            <canvas id="chartMingguan" height="120" class="mt-3"></canvas>
+            <p class="text-[11px] text-slate-400 mt-2">
+                Centang kiat tiap hari, grafik akan naik. Ini contoh data minggu
+                ini.
+            </p>
+        </div>
+
+        <!-- PENGINGAT -->
+        <div
+            class="bg-amber-50 border border-amber-200 rounded-2xl p-4 mt-4 flex gap-3 items-center"
+        >
+            <span class="text-2xl">⏰</span>
+            <div class="flex-1">
+                <p class="font-extrabold text-sm">
+                    Pengingat Dzikir & Orang Tua
+                </p>
+                <p class="text-xs text-slate-600">
+                    Aktifkan biar tiap jam diingetin dzikir + telepon ibu.
+                </p>
+            </div>
+            <button
+                onclick="aktifkanReminder()"
+                class="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold"
+            >
+                Aktifkan
+            </button>
+        </div>
+
+        <!-- CRUD CONTROL -->
+        <div class="bg-white rounded-2xl p-4 shadow mt-4">
+            <div class="flex flex-col md:flex-row gap-2">
+                <input
+                    id="search"
+                    oninput="render()"
+                    placeholder="🔍 Cari kiat..."
+                    class="flex-1 border rounded-xl px-3 py-2.5 text-sm"
+                />
+                <select
+                    id="filterKategori"
+                    onchange="render()"
+                    class="border rounded-xl px-3 py-2.5 text-sm"
+                >
+                    <option value="Semua">Semua Kategori</option>
+                    <option>Orang Tua</option>
+                    <option>Sedekah</option>
+                    <option>Keluarga</option>
+                    <option>Syukur</option>
+                    <option>Sehat</option>
+                    <option>Dzikir</option>
+                    <option>Lainnya</option>
+                </select>
+                <button
+                    onclick="openModal()"
+                    class="bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold text-sm"
+                >
+                    + Tambah Kiat
+                </button>
+            </div>
+            <div class="flex gap-2 mt-3 text-[11px]">
+                <button
+                    onclick="resetChecklist()"
+                    class="bg-slate-100 px-3 py-1.5 rounded-full font-bold"
+                >
+                    🔄 Reset Checklist</button
+                ><button
+                    onclick="resetAll()"
+                    class="bg-red-50 text-red-600 px-3 py-1.5 rounded-full font-bold"
+                >
+                    🗑️ Hapus Semua
+                </button>
+            </div>
+        </div>
+
+        <div id="list" class="grid md:grid-cols-2 gap-3 mt-4"></div>
+
+        <div class="bg-white rounded-2xl p-4 shadow mt-4">
+            <h3 class="font-extrabold">📝 Daftar Syukur</h3>
+            <ul id="listSyukur" class="mt-2 space-y-1 text-sm"></ul>
+        </div>
+        <p class="text-center text-[11px] text-slate-400 mt-6">
+            B6 • Wa ufawwidhu amrii ilallaah • Setelah ikhtiar, serahkan ke
+            Allah
+        </p>
+
+        <!-- MODAL -->
+        <div
+            id="modal"
+            class="fixed inset-0 bg-black/50 hidden items-center justify-center p-4 z-50"
+        >
+            <div class="bg-white w-full max-w-md rounded-3xl p-5">
+                <h3 id="modalTitle" class="font-extrabold text-lg">
+                    Tambah Kiat
+                </h3>
+                <input
+                    id="fJudul"
+                    placeholder="Judul"
+                    class="w-full border rounded-xl px-3 py-2.5 mt-4 text-sm"
+                /><textarea
+                    id="fIsi"
+                    placeholder="Detailnya..."
+                    class="w-full border rounded-xl px-3 py-2.5 mt-2 text-sm h-24"
+                ></textarea
+                ><select
+                    id="fKategori"
+                    class="w-full border rounded-xl px-3 py-2.5 mt-2 text-sm"
+                >
+                    <option>Orang Tua</option>
+                    <option>Sedekah</option>
+                    <option>Keluarga</option>
+                    <option>Syukur</option>
+                    <option>Sehat</option>
+                    <option>Dzikir</option>
+                    <option>Lainnya</option>
+                </select>
+                <div class="flex gap-2 mt-4">
+                    <button
+                        onclick="closeModal()"
+                        class="flex-1 bg-slate-100 py-2.5 rounded-xl font-bold"
+                    >
+                        Batal</button
+                    ><button
+                        onclick="saveKiat()"
+                        class="flex-1 bg-emerald-600 text-white py-2.5 rounded-xl font-bold"
+                    >
+                        Simpan
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            let defaultData = [
+                {
+                    id: 1,
+                    judul: "Berbakti & Doa ke Ibu",
+                    isi: "Telpon / chat ibu, minta doa & ridho. Doa ibu = kunci rezeki.",
+                    kategori: "Orang Tua",
+                    done: false
+                },
+                {
+                    id: 2,
+                    judul: "Sedekah Hari Ini",
+                    isi: "Sedekah walau Rp 5.000. Bantu orang yang kesulitan.",
+                    kategori: "Sedekah",
+                    done: false
+                },
+                {
+                    id: 3,
+                    judul: "Setia & Dukung Pasangan",
+                    isi: "1 kebaikan kecil untuk pasangan hari ini.",
+                    kategori: "Keluarga",
+                    done: false
+                },
+                {
+                    id: 4,
+                    judul: "Dengarkan Anak 100%",
+                    isi: "HP taruh, tatap mata, dengarkan sampai selesai.",
+                    kategori: "Keluarga",
+                    done: false
+                },
+                {
+                    id: 5,
+                    judul: "Jurnal Syukur 3 Hal",
+                    isi: "Tulis 3 nikmat hari ini. Fokus pada yang ada.",
+                    kategori: "Syukur",
+                    done: false
+                },
+                {
+                    id: 6,
+                    judul: "Pasrah: Wa Ufawwidhu Amrii",
+                    isi: "Setelah ikhtiar maksimal, serahkan hasil ke Allah.",
+                    kategori: "Syukur",
+                    done: false
+                },
+                {
+                    id: 7,
+                    judul: "Pola Makan 1/3 - 1/3 - 1/3",
+                    isi: "1/3 makanan, 1/3 minuman, 1/3 udara.",
+                    kategori: "Sehat",
+                    done: false
+                },
+                {
+                    id: 8,
+                    judul: "No Rokok Hari Ini",
+                    isi: "Hindari rokok. Ganti air putih / jalan 10 menit.",
+                    kategori: "Sehat",
+                    done: false
+                },
+                {
+                    id: 9,
+                    judul: "Relaksasi Dzikir 5 Menit",
+                    isi: "Dzikir dengan pasrah total. Lepas stres & cemas.",
+                    kategori: "Dzikir",
+                    done: false
+                }
+            ];
+            let data =
+                JSON.parse(localStorage.getItem("kiatB6")) || defaultData;
+            let syukurList = JSON.parse(localStorage.getItem("syukurB6")) || [];
+            let dzikir = parseInt(localStorage.getItem("dzikirB6") || 0);
+            let sedekah = parseInt(localStorage.getItem("sedekahB6") || 0);
+            let editId = null,
+                myChart = null;
+            function save() {
+                localStorage.setItem("kiatB6", JSON.stringify(data));
+                localStorage.setItem("syukurB6", JSON.stringify(syukurList));
+                localStorage.setItem("dzikirB6", dzikir);
+                localStorage.setItem("sedekahB6", sedekah);
+            }
+            function render() {
+                let q = document.getElementById("search").value.toLowerCase(),
+                    f = document.getElementById("filterKategori").value;
+                let filtered = data.filter(
+                    d =>
+                        (f === "Semua" || d.kategori === f) &&
+                        (d.judul + d.isi).toLowerCase().includes(q)
+                );
+                document.getElementById("list").innerHTML =
+                    filtered
+                        .map(
+                            d =>
+                                `<div class="bg-white rounded-2xl p-4 shadow border-l-4 ${d.done ? "border-emerald-500" : "border-amber-400"}"><div class="flex justify-between"><span class="text-[10px] font-bold bg-slate-100 px-2 py-1 rounded-full">${d.kategori}</span><label class="flex items-center gap-1 text-xs font-bold"><input type="checkbox" ${d.done ? "checked" : ""} onchange="toggleDone(${d.id})" class="w-4 h-4 accent-emerald-600"> Selesai</label></div><h3 class="font-extrabold mt-2 ${d.done ? "opacity-60 line-through" : ""}">${d.judul}</h3><p class="text-sm text-slate-600 mt-1">${d.isi}</p><div class="flex gap-2 mt-3"><button onclick="editKiat(${d.id})" class="text-xs bg-blue-50 text-blue-700 px-3 py-1.5 rounded-full font-bold">✏️ Edit</button><button onclick="hapusKiat(${d.id})" class="text-xs bg-red-50 text-red-600 px-3 py-1.5 rounded-full font-bold">🗑️ Hapus</button></div></div>`
+                        )
+                        .join("") ||
+                    '<p class="text-center col-span-2 text-slate-400 py-6">Belum ada kiat</p>';
+                let total = data.length,
+                    done = data.filter(d => d.done).length,
+                    pct = total ? Math.round((done / total) * 100) : 0;
+                document.getElementById("progressBar").style.width = pct + "%";
+                document.getElementById("progressText").innerText =
+                    pct + "% (" + done + "/" + total + ")";
+                document.getElementById("dzikirCount").innerText = dzikir;
+                document.getElementById("sedekahTotal").innerText =
+                    sedekah.toLocaleString("id-ID");
+                document.getElementById("syukurCount").innerText =
+                    syukurList.length;
+                document.getElementById("listSyukur").innerHTML =
+                    syukurList
+                        .map(
+                            (s, i) =>
+                                `<li class="flex justify-between bg-amber-50 p-2 rounded-lg"><span>✨ ${s}</span><button onclick="hapusSyukur(${i})" class="text-red-500">✕</button></li>`
+                        )
+                        .join("") ||
+                    '<li class="text-slate-400">Belum ada syukur</li>';
+                document.getElementById("dateNow").innerText =
+                    new Date().toLocaleDateString("id-ID", {
+                        weekday: "long",
+                        day: "numeric",
+                        month: "long"
+                    });
+                document.getElementById("streak").innerText =
+                    done > 0 ? "1 hari - lanjutkan!" : "0 hari";
+            }
+            function toggleDone(id) {
+                let d = data.find(x => x.id === id);
+                d.done = !d.done;
+                save();
+                render();
+            }
+            function openModal() {
+                editId = null;
+                document.getElementById("modalTitle").innerText =
+                    "Tambah Kiat Baru";
+                document.getElementById("fJudul").value = "";
+                document.getElementById("fIsi").value = "";
+                document.getElementById("modal").style.display = "flex";
+            }
+            function closeModal() {
+                document.getElementById("modal").style.display = "none";
+            }
+            function saveKiat() {
+                let j = document.getElementById("fJudul").value.trim(),
+                    isi = document.getElementById("fIsi").value.trim(),
+                    kat = document.getElementById("fKategori").value;
+                if (!j) return alert("Judul wajib diisi!");
+                if (editId) {
+                    let d = data.find(x => x.id === editId);
+                    d.judul = j;
+                    d.isi = isi;
+                    d.kategori = kat;
+                } else
+                    data.unshift({
+                        id: Date.now(),
+                        judul: j,
+                        isi,
+                        kategori: kat,
+                        done: false
+                    });
+                save();
+                render();
+                closeModal();
+            }
+            function editKiat(id) {
+                let d = data.find(x => x.id === id);
+                editId = id;
+                document.getElementById("modalTitle").innerText = "Edit Kiat";
+                document.getElementById("fJudul").value = d.judul;
+                document.getElementById("fIsi").value = d.isi;
+                document.getElementById("fKategori").value = d.kategori;
+                document.getElementById("modal").style.display = "flex";
+            }
+            function hapusKiat(id) {
+                if (confirm("Yakin hapus?")) {
+                    data = data.filter(x => x.id !== id);
+                    save();
+                    render();
+                }
+            }
+            function tambahDzikir() {
+                dzikir++;
+                save();
+                render();
+            }
+            function resetDzikir() {
+                dzikir = 0;
+                save();
+                render();
+            }
+            function tambahSedekah() {
+                let v = parseInt(
+                    document.getElementById("inputSedekah").value || 0
+                );
+                if (v <= 0) return alert("Isi nominal dulu");
+                sedekah += v;
+                document.getElementById("inputSedekah").value = "";
+                save();
+                render();
+            }
+            function tambahSyukur() {
+                let v = document.getElementById("inputSyukur").value.trim();
+                if (!v) return;
+                syukurList.unshift(v);
+                document.getElementById("inputSyukur").value = "";
+                save();
+                render();
+            }
+            function hapusSyukur(i) {
+                syukurList.splice(i, 1);
+                save();
+                render();
+            }
+            function resetChecklist() {
+                data.forEach(d => (d.done = false));
+                save();
+                render();
+            }
+            function resetAll() {
+                if (confirm("Hapus semua data B6?")) {
+                    localStorage.clear();
+                    location.reload();
+                }
+            }
+            function toggleDark() {
+                document.getElementById("body").classList.toggle("dark");
+                localStorage.setItem(
+                    "darkB6",
+                    document.getElementById("body").classList.contains("dark")
+                );
+            }
+            if (localStorage.getItem("darkB6") === "true")
+                document.getElementById("body").classList.add("dark");
+            function aktifkanReminder() {
+                if (Notification in window) {
+                    Notification.requestPermission().then(p => {
+                        if (p === "granted") {
+                            alert(
+                                "Pengingat aktif! Nanti tiap 1 jam gue ingetin dzikir + telepon ibu."
+                            );
+                            setInterval(() => {
+                                new Notification("Waktunya Dzikir 🤲", {
+                                    body: "Tarik napas, ucap Astaghfirullah. Sudah telepon ibu hari ini?"
+                                });
+                            }, 3600000);
+                        } else
+                            alert("Izinkan notifikasi dulu di browser ya bre");
+                    });
+                } else alert("Browser lu gak dukung notifikasi");
+            }
+            function buatChart(dataMinggu) {
+                let ctx = document
+                    .getElementById("chartMingguan")
+                    .getContext("2d");
+                if (myChart) myChart.destroy();
+                myChart = new Chart(ctx, {
+                    type: "bar",
+                    data: {
+                        labels: [
+                            "Sen",
+                            "Sel",
+                            "Rab",
+                            "Kam",
+                            "Jum",
+                            "Sab",
+                            "Min"
+                        ],
+                        datasets: [
+                            {
+                                label: "Kiat Selesai",
+                                data: dataMinggu,
+                                backgroundColor: "#059669",
+                                borderRadius: 8
+                            }
+                        ]
+                    },
+                    options: {
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true, max: 10 } }
+                    }
+                });
+            }
+            function simulasiMinggu() {
+                buatChart([4, 6, 5, 8, 7, 9, 3]);
+            }
+            buatChart([2, 3, 4, 5, 6, 4, 0]);
+            render();
+        </script>
+    </body>
+</html>
