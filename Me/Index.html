@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>duit-bre-pro FINAL</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+*{font-family:'JetBrains Mono',monospace}
+body{background:#1e1e1e;color:#d4d4d4}
+body.light{background:#f5f5f5;color:#111}
+body.light .sidebar,body.light .card{background:white;color:#111;border-color:#ddd}
+body.light input,body.light select{background:#fff;color:#111;border-color:#ddd}
+.sidebar{background:#252526;border-right:1px solid #2d2d2d}
+.card{background:#252526;border:1px solid #333;border-radius:10px;padding:14px}
+input,select{background:#1e1e1e;border:1px solid #3c3c3c;color:#d4d4d4;padding:12px;border-radius:8px;width:100%;margin-top:6px;font-size:14px}
+.btn{background:#0e639c;color:white;font-weight:700;padding:12px;border-radius:8px;width:100%;font-size:14px}
+.btn-green{background:#16825d;color:white}
+.menu-btn{padding:14px 12px;font-size:14px;border-radius:10px;width:100%;text-align:left;cursor:pointer;background:#2d2d2d;color:#d4d4d4;border:2px solid transparent}
+.menu-btn.active{background:#0e639c;color:white;border-color:#58a6ff}
+.tab-btn{padding:12px 16px;font-size:13px;background:#2d2d2d;color:#aaa;white-space:nowrap;cursor:pointer;min-width:110px;text-align:center;border-radius:8px 8px 0 0}
+.tab-btn.active{background:#1e1e1e;color:white;border-top:3px solid #007acc}
+.statusbar{background:#007acc;color:white;font-size:11px}
+.kw{color:#569cd6}.fn{color:#dcdcaa}.num{color:#b5cea8}.cm{color:#6a9955}.var{color:#9cdcfe}
+.badge{font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700}
+</style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden" id="mainBody">
+<div class="flex items-center gap-2 px-3 py-2 bg-[#323233] text-[12px] shrink-0">
+<div class="flex gap-1.5"><div class="w-3 h-3 rounded-full bg-[#ff5f57]"></div><div class="w-3 h-3 rounded-full bg-[#febc2e]"></div><div class="w-3 h-3 rounded-full bg-[#28c840]"></div></div>
+<span class="ml-auto text-zinc-400">duit-bre-pro FINAL</span>
+</div>
+<div class="flex gap-2 p-2 bg-[#252526] overflow-x-auto shrink-0 md:hidden">
+<button class="tab-btn active shrink-0" data-menu="transaksi" onclick="goMenu('transaksi')">📄 Transaksi</button>
+<button class="tab-btn shrink-0" data-menu="riwayat" onclick="goMenu('riwayat')">📜 Riwayat (<span id="countTop">0</span>)</button>
+<button class="tab-btn shrink-0" data-menu="darurat" onclick="goMenu('darurat')">🛟 Darurat</button>
+<button class="tab-btn shrink-0" data-menu="sinking" onclick="goMenu('sinking')">🎯 Sinking</button>
+<button class="tab-btn shrink-0" data-menu="setting" onclick="goMenu('setting')">⚙️ Setting</button>
+</div>
+<div class="flex flex-1 overflow-hidden">
+<div class="sidebar w-[240px] hidden md:flex flex-col shrink-0"><div class="p-3">
+<p class="text-[11px] tracking-widest text-zinc-500 font-bold">EXPLORER</p>
+<button class="menu-btn mt-3 active" data-menu="transaksi" onclick="goMenu('transaksi')">📄 transaksi.js</button>
+<button class="menu-btn mt-2" data-menu="riwayat" onclick="goMenu('riwayat')">📜 riwayat.log — <span id="countSide">0</span></button>
+<button class="menu-btn mt-2" data-menu="darurat" onclick="goMenu('darurat')">🛟 darurat.json</button>
+<button class="menu-btn mt-2" data-menu="sinking" onclick="goMenu('sinking')">🎯 sinking.py</button>
+<button class="menu-btn mt-2" data-menu="setting" onclick="goMenu('setting')">⚙️ setting.json</button>
+<div class="mt-4 border-t border-[#333] pt-3">
+<p class="text-[11px] text-zinc-500">DEBUG</p>
+<p class="text-[12px] mt-2" id="debugMenu">Menu: transaksi</p>
+<button onclick="testMenu()" class="w-full mt-2 bg-[#333] py-2 rounded-md text-xs">🧪 Tes Semua Menu</button>
+<button onclick="cekData()" class="w-full mt-2 bg-[#0e639c] py-2 rounded-md text-xs font-bold">🔍 Cek Data</button>
+</div>
+<div class="mt-auto border-t border-[#333] pt-3"><div class="flex items-center gap-2"><div class="w-9 h-9 rounded-full bg-green-600 flex items-center justify-center font-bold text-white" id="avatarLetter">L</div><div><p class="text-[13px] font-bold" id="namaSide">Lukman Hakim</p><p class="text-[11px] text-zinc-500" id="kotaSide">Semarang</p></div></div></div>
+</div></div>
+<div class="flex-1 flex flex-col overflow-hidden">
+<div class="flex-1 overflow-y-auto p-4 max-w-[760px] mx-auto w-full">
+<p class="cm text-xs">// Halo <span id="namaTop">Lukman</span> — klik menu, pasti pindah!</p>
+<h1 class="text-[20px] font-bold mt-1"><span class="kw">function</span> <span class="fn">aturDuit</span>() {</h1>
+<p class="text-[12px] text-zinc-500 mt-1">Menu aktif: <b class="text-green-400" id="menuAktifLabel">transaksi</b></p>
+<div class="grid md:grid-cols-2 gap-3 mt-3">
+<div class="card">
+<p class="cm text-xs">// gaji</p>
+<p class="text-[13px] mt-1"><span class="kw">const</span> <span class="var">gaji</span> = <span class="num" id="gajiLabel">0</span>;</p>
+<div class="flex gap-2"><input id="gaji" type="number" placeholder="3500000"><button class="btn !w-[90px]" onclick="saveGaji()">RUN ▶</button></div>
+<div id="bagi" class="grid grid-cols-3 gap-2 mt-3 text-center text-[11px]"></div>
+</div>
+<div class="card">
+<p class="cm text-xs">// analytics</p>
+<canvas id="donut" height="150"></canvas>
+<p id="insight" class="text-[12px] text-yellow-300 mt-2 font-bold"></p>
+</div>
+</div>
+<div id="page-transaksi" class="page mt-3">
+<div class="card">
+<p class="cm text-xs">// TAMBAH TRANSAKSI</p>
+<div class="grid grid-cols-2 gap-2">
+<select id="jenis"><option value="Masuk">Masuk 💰</option><option value="Need">Need - Wajib</option><option value="Want">Want - Jajan</option><option value="Future">Future</option></select>
+<input id="tgl" type="date">
+</div>
+<input id="ket" placeholder="ket: 'Gajian', 'Bensin', 'Ngopi'">
+<input id="nom" type="number" placeholder="nominal: 50000">
+<button class="btn mt-3 btn-green" onclick="addTransaksi()">+ SAVE — Masuk ke Riwayat →</button>
+</div>
+<div class="card mt-3 text-center"><p class="text-[13px]">Abis isi, cek riwayat 👇</p><button class="btn mt-2" onclick="goMenu('riwayat')">📜 LIHAT RIWAYAT →</button></div>
+</div>
+
+<div id="page-riwayat" class="page mt-3 hidden">
+<div class="card !border-[#007acc]">
+<p class="font-bold">📜 RIWAYAT — <span id="totalRiwayat">0 transaksi</span></p>
+<div class="grid grid-cols-2 gap-2 mt-2">
+<input id="search" placeholder="🔍 cari: ngopi..." oninput="render()">
+<select id="filterJenis" onchange="render()"><option value="">Semua</option><option>Masuk</option><option>Need</option><option>Want</option><option>Future</option></select>
+</div>
+<input id="filterBulan" type="month" onchange="render()">
+<div class="grid grid-cols-3 gap-2 mt-3 text-center text-[12px]">
+<div class="card !p-2">Masuk<br><b class="text-green-400" id="tMasuk">Rp 0</b></div>
+<div class="card !p-2">Keluar<br><b class="text-red-400" id="tKeluar">Rp 0</b></div>
+<div class="card !p-2">Sisa<br><b class="text-yellow-300" id="tSisa">Rp 0</b></div>
+</div>
+</div>
+<div id="listTransaksi" class="mt-3 space-y-2"></div>
+<button onclick="exportCSV()" class="btn btn-green mt-3">📊 Export Riwayat ke Excel</button>
+</div>
+
+<div id="page-darurat" class="page mt-3 hidden">
+<div class="card">
+<p class="font-bold">🛟 Dana Darurat</p>
+<input id="targetDarurat" type="number" placeholder="target: 6000000">
+<input id="isiDarurat" type="number" placeholder="isi: 1000000">
+<button class="btn mt-3" onclick="saveDarurat()">💾 Save Darurat</button>
+<div class="bg-[#1e1e1e] h-3 rounded-full mt-3 overflow-hidden border border-[#333]"><div id="barDarurat" class="bg-green-500 h-3" style="width:0%"></div></div>
+<p id="infoDarurat" class="text-xs text-zinc-400 mt-2"></p></div>
+</div>
+
+<div id="page-sinking" class="page mt-3 hidden">
+<div class="card">
+<p class="font-bold">🎯 Sinking Fund</p>
+<input id="namaSink" placeholder="nama = 'Servis Motor'">
+<input id="targetSink" type="number" placeholder="target = 1000000">
+<input id="isiSink" type="number" placeholder="isi = 200000">
+<button class="btn mt-3" onclick="addSinking()">+ Tambah Dana</button></div>
+<div id="listSinking" class="mt-3 space-y-2"></div>
+</div>
+<div id="page-setting" class="page mt-3 hidden">
+<div class="card !border-yellow-500">
+<p class="font-bold text-[16px]">⚙️ SETTING — Pengaturan Gue</p>
+<p class="text-xs text-zinc-400">Auto-save bre!</p>
+</div>
+<div class="card mt-3">
+<p class="font-bold">👤 1. Profil Gue</p>
+<label class="text-xs text-zinc-400">Nama Lu</label>
+<input id="setNama" placeholder="Lukman Hakim" oninput="saveSetting()">
+<label class="text-xs text-zinc-400">Kota</label>
+<input id="setKota" placeholder="Semarang" oninput="saveSetting()">
+<label class="text-xs text-zinc-400">Gaji Pokok</label>
+<input id="setGajiPokok" type="number" placeholder="3500000" oninput="saveSetting()">
+</div>
+<div class="card mt-3">
+<p class="font-bold">🎨 2. Tampilan</p>
+<div class="flex gap-2 mt-2">
+<button onclick="setTheme('dark')" class="flex-1 bg-[#1e1e1e] border border-[#333] py-3 rounded-lg text-sm">🌙 Dark</button>
+<button onclick="setTheme('light')" class="flex-1 bg-white text-black border py-3 rounded-lg text-sm">☀️ Light</button>
+</div>
+<p class="text-xs text-zinc-400 mt-2">Mode: <b id="themeLabel">dark</b></p>
+<label class="text-xs text-zinc-400">Mata Uang</label>
+<select id="setMataUang" onchange="saveSetting()"><option value="Rp">Rp - Rupiah</option><option value="$">$ - Dollar</option><option value="RM">RM - Ringgit</option></select>
+</div>
+<div class="card mt-3">
+<p class="font-bold">💰 3. Aturan Bagi Duit</p>
+<div class="grid grid-cols-3 gap-2">
+<div><label class="text-xs">Need %</label><input id="setNeed" type="number" value="50" oninput="saveSetting()"></div>
+<div><label class="text-xs">Want %</label><input id="setWant" type="number" value="30" oninput="saveSetting()"></div>
+<div><label class="text-xs">Future %</label><input id="setFuture" type="number" value="20" oninput="saveSetting()"></div>
+</div>
+<p class="text-xs text-green-400 mt-1" id="totalPersen">Total: 100% ✅</p>
+</div>
+<div class="card mt-3">
+<p class="font-bold">💾 4. Data & Backup</p>
+<button onclick="exportCSV()" class="btn btn-green">📊 Export ke Excel</button>
+<button onclick="backupData()" class="btn mt-2">💾 Download Backup (.json)</button>
+<label class="text-xs text-zinc-400 mt-3 block">Restore Backup</label>
+<input type="file" id="restoreFile" accept=".json" onchange="restoreData(event)">
+<p class="text-xs text-zinc-500 mt-2" id="storageInfo">...</p>
+<button onclick="cekData()" class="w-full mt-2 bg-[#333] py-2 rounded-md text-xs">🔍 Cek & Pulihkan Data Lama</button>
+</div>
+<div class="card mt-3 !border-red-500">
+<p class="font-bold text-red-400">☠️ 5. Zona Bahaya</p>
+<button onclick="hapusSemuaRiwayat()" class="w-full bg-red-600 py-3 rounded-lg text-sm font-bold mt-2">🗑️ Hapus Semua Riwayat</button>
+<button onclick="resetSemua()" class="w-full bg-zinc-700 py-3 rounded-lg text-sm font-bold mt-2">🔄 Reset Aplikasi</button>
+</div>
+<div class="card mt-3 text-center text-xs text-zinc-500"><p>duit-bre-pro v4.0 — by Lukman Hakim • Semarang • 2026</p></div>
+</div>
+<p class="text-zinc-600 text-xs mt-4 text-center">} // end aturDuit()</p>
+</div>
+<div class="p-3 text-[12px] shrink-0 border-t border-[#333] bg-[#1e1e1e]"><span class="text-green-400">lukman@semarang $</span> <span id="termLog">ready...</span></div>
+<div class="statusbar flex justify-between px-3 py-1.5 shrink-0"><span>🌿 main* &nbsp; Menu: <span id="statusMenu">transaksi</span> &nbsp; Riwayat: <span id="statusRiwayat">0</span></span><span>Auto-Save ON ✓</span></div>
+</div>
+</div>
+<script>
+const KEY='duitBreFinal'; const KEY_SET='duitBreSetting';
+let setting=JSON.parse(localStorage.getItem(KEY_SET)||'{"nama":"Lukman Hakim","kota":"Semarang","gajiPokok":0,"theme":"dark","mataUang":"Rp","need":50,"want":30,"future":20}');
+let data=null;
+function loadData(){
+let raw=localStorage.getItem(KEY);
+if(raw){try{data=JSON.parse(raw)}catch(e){data=null}}
+if(!data||!data.transaksi){
+let m={transaksi:[],sinking:[],gaji:0,darurat:{target:0,isi:0}};let f=0;
+['duitBre','duitBreV2','duitBreDev','duitBrePro'].forEach(k=>{try{let o=JSON.parse(localStorage.getItem(k)||'null');if(o&&o.transaksi){m.transaksi=m.transaksi.concat(o.transaksi);f+=o.transaksi.length}if(o&&o.sinking)m.sinking=m.sinking.concat(o.sinking);if(o&&o.gaji)m.gaji=o.gaji;if(o&&o.darurat)m.darurat=o.darurat}catch(e){}});
+data=m;if(f>0)alert('✅ Pulih '+f+' riwayat lama!');
+if(!data.transaksi)data.transaksi=[];if(!data.sinking)data.sinking=[];
+}
+if(setting.gajiPokok&&!data.gaji)data.gaji=setting.gajiPokok;
+}
+function saveSilent(){localStorage.setItem(KEY,JSON.stringify(data))}
+function save(){saveSilent();render()}
+function saveSetting(){
+setting.nama=document.getElementById('setNama').value||'Lukman Hakim';
+setting.kota=document.getElementById('setKota').value||'Semarang';
+setting.gajiPokok=+document.getElementById('setGajiPokok').value||0;
+setting.mataUang=document.getElementById('setMataUang').value;
+setting.need=+document.getElementById('setNeed').value||50;
+setting.want=+document.getElementById('setWant').value||30;
+setting.future=+document.getElementById('setFuture').value||20;
+localStorage.setItem(KEY_SET,JSON.stringify(setting));
+document.getElementById('totalPersen').innerText='Total: '+(setting.need+setting.want+setting.future)+'% '+(setting.need+setting.want+setting.future===100?'✅':'⚠️ Harusnya 100%!');
+render();log('setting saved: '+setting.nama);
+}
+function setTheme(t){setting.theme=t;localStorage.setItem(KEY_SET,JSON.stringify(setting));applyTheme()}
+function applyTheme(){let b=document.getElementById('mainBody');if(setting.theme==='light')b.classList.add('light');else b.classList.remove('light');document.getElementById('themeLabel').innerText=setting.theme}
+function goMenu(nama){
+document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));
+let t=document.getElementById('page-'+nama);if(!t)return;t.classList.remove('hidden');
+document.querySelectorAll('[data-menu]').forEach(btn=>{if(btn.getAttribute('data-menu')===nama)btn.classList.add('active');else btn.classList.remove('active')});
+document.getElementById('menuAktifLabel').innerText=nama;document.getElementById('statusMenu').innerText=nama;document.getElementById('debugMenu').innerText='Menu aktif: '+nama+' ✅';log('menu → '+nama+' ✅');
+let sc=document.querySelector('.overflow-y-auto');if(sc)sc.scrollTop=0;
+}
+function testMenu(){let ms=['transaksi','riwayat','darurat','sinking','setting'];let i=0;let tm=setInterval(()=>{goMenu(ms[i]);i++;if(i>=ms.length){clearInterval(tm);setTimeout(()=>{goMenu('transaksi');alert('✅ TES BERHASIL! Semua menu jalan!')},600)}},600)}
+let chart=null;
+function fmt(n){return (setting.mataUang||'Rp')+' '+Number(n||0).toLocaleString('id-ID')}
+function log(m){document.getElementById('termLog').innerText=m}
+function cekData(){let info='';['duitBreFinal','duitBre','duitBreV2','duitBreDev','duitBrePro'].forEach(k=>{try{let v=localStorage.getItem(k);let j=v?JSON.parse(v).transaksi?.length||0:0;info+=k+': '+j+'\n'}catch(e){}});alert('CEK DATA:\n\n'+info+'\nAktif: '+data.transaksi.length);localStorage.removeItem(KEY);loadData();render()}
+function backupData(){let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify({data,setting})],{type:'application/json'}));a.download='backup-duit-bre.json';a.click();alert('Backup ke-download!')}
+function restoreData(e){let f=e.target.files[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{let j=JSON.parse(r.result);if(j.data)data=j.data;if(j.setting)setting=j.setting;saveSilent();localStorage.setItem(KEY_SET,JSON.stringify(setting));loadSettingToForm();render();alert('✅ Restore berhasil! '+data.transaksi.length+' transaksi!')}catch(err){alert('File rusak bre!')}};r.readAsText(f)}
+function resetSemua(){if(confirm('Reset SEMUA?')){localStorage.removeItem(KEY);localStorage.removeItem(KEY_SET);location.reload()}}
+function hapusSemuaRiwayat(){if(confirm('Hapus semua riwayat?')){data.transaksi=[];save();alert('Riwayat dihapus.')}}
+function saveGaji(){data.gaji=+document.getElementById('gaji').value;save();log('gaji saved')}
+function addTransaksi(){let j=document.getElementById('jenis').value,k=document.getElementById('ket').value,n=+document.getElementById('nom').value,t=document.getElementById('tgl').value||new Date().toISOString().slice(0,10);if(!k||!n)return alert('Isi keterangan + nominal!');data.transaksi.unshift({id:Date.now(),jenis:j,ket:k,nom:n,tgl:t});save();alert('✅ KESIMPEN: '+k+' '+fmt(n));document.getElementById('ket').value='';document.getElementById('nom').value='';goMenu('riwayat')}
+function delTransaksi(id){if(confirm('Hapus?')){data.transaksi=data.transaksi.filter(x=>x.id!==id);save()}}
+function editTransaksi(id){let t=data.transaksi.find(x=>x.id===id);let b=prompt('Edit nominal '+t.ket,t.nom);if(b)t.nom=+b;save()}
+function saveDarurat(){data.darurat={target:+document.getElementById('targetDarurat').value,isi:+document.getElementById('isiDarurat').value};save()}
+function addSinking(){let n=document.getElementById('namaSink').value,t=+document.getElementById('targetSink').value,i=+document.getElementById('isiSink').value;if(!n)return alert('Isi nama');data.sinking.push({id:Date.now(),nama:n,target:t,isi:i});save()}
+function delSinking(id){data.sinking=data.sinking.filter(x=>x.id!==id);save()}
+function tambahSinking(id){let s=data.sinking.find(x=>x.id===id);let t=prompt('Tambah berapa ke '+s.nama+'?',50000);if(t)s.isi+=+t;save()}
+function exportCSV(){let csv='Tanggal,Jenis,Keterangan,Nominal\n'+data.transaksi.map(x=>`${x.tgl},${x.jenis},${x.ket},${x.nom}`).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='riwayat-duit-bre.csv';a.click()}
+function loadSettingToForm(){document.getElementById('setNama').value=setting.nama;document.getElementById('setKota').value=setting.kota;document.getElementById('setGajiPokok').value=setting.gajiPokok||'';document.getElementById('setMataUang').value=setting.mataUang||'Rp';document.getElementById('setNeed').value=setting.need;document.getElementById('setWant').value=setting.want;document.getElementById('setFuture').value=setting.future;applyTheme()}
+function render(){
+document.getElementById('gaji').value=data.gaji||'';document.getElementById('gajiLabel').innerText=fmt(data.gaji||0);
+document.getElementById('countTop').innerText=data.transaksi.length;document.getElementById('countSide').innerText=data.transaksi.length;document.getElementById('statusRiwayat').innerText=data.transaksi.length;document.getElementById('totalRiwayat').innerText=data.transaksi.length+' transaksi';
+document.getElementById('namaTop').innerText=setting.nama.split(' ')[0];document.getElementById('namaSide').innerText=setting.nama;document.getElementById('kotaSide').innerText=setting.kota;document.getElementById('avatarLetter').innerText=(setting.nama[0]||'L').toUpperCase();
+document.getElementById('storageInfo').innerText='Tersimpan: '+data.transaksi.length+' transaksi • Key: duitBreFinal • Auto-Save ON';
+let bagi=document.getElementById('bagi');if(data.gaji){bagi.innerHTML=`<div class="card !p-2">${setting.need}%<br><b>${fmt(data.gaji*setting.need/100)}</b><br>Need</div><div class="card !p-2">${setting.want}%<br><b>${fmt(data.gaji*setting.want/100)}</b><br>Want</div><div class="card !p-2">${setting.future}%<br><b>${fmt(data.gaji*setting.future/100)}</b><br>Future</div>`}
+let need=data.transaksi.filter(x=>x.jenis==='Need').reduce((a,b)=>a+b.nom,0),want=data.transaksi.filter(x=>x.jenis==='Want').reduce((a,b)=>a+b.nom,0),future=data.transaksi.filter(x=>x.jenis==='Future').reduce((a,b)=>a+b.nom,0);
+let masuk=data.transaksi.filter(x=>x.jenis==='Masuk').reduce((a,b)=>a+b.nom,0),keluar=need+want+future;
+document.getElementById('tMasuk').innerText=fmt(masuk);document.getElementById('tKeluar').innerText=fmt(keluar);document.getElementById('tSisa').innerText=fmt(masuk-keluar);
+document.getElementById('insight').innerText=want>need?'⚠️ Want > Need! Bocor di jajan!':want>0?'✅ Want kekontrol.':'// Isi transaksi biar chart jalan.';
+let ctx=document.getElementById('donut');if(chart)chart.destroy();chart=new Chart(ctx,{type:'doughnut',data:{labels:['Need','Want','Future'],datasets:[{data:[need,want,future],backgroundColor:['#58a6ff','#facc15','#3fb950']}]},options:{plugins:{legend:{labels:{color:'#aaa'}}}}});
+let q=(document.getElementById('search')?.value||'').toLowerCase(),f=document.getElementById('filterJenis')?.value||'',b=document.getElementById('filterBulan')?.value||'';
+let list=data.transaksi.filter(x=>(!q||x.ket.toLowerCase().includes(q))&&(!f||x.jenis===f)&&(!b||(x.tgl||'').startsWith(b)));
+document.getElementById('listTransaksi').innerHTML=list.length===0?`<div class="card text-center !py-6"><p class="font-bold">Belum ada riwayat 😅</p><p class="text-xs text-zinc-400 mt-1">Tambah 1 di menu Transaksi dulu bre.</p><button onclick="goMenu('transaksi')" class="bg-[#0e639c] px-4 py-2 rounded-md text-xs font-bold mt-3">+ Tambah Transaksi</button></div>`:list.map(x=>`<div class="card flex justify-between items-center !py-3"><div><b class="text-[13px]">${x.ket}</b><br><span class="text-[11px] text-zinc-500">${x.tgl} • </span><span class="badge ${x.jenis==='Masuk'?'bg-green-600 text-white':x.jenis==='Need'?'bg-blue-600 text-white':x.jenis==='Want'?'bg-yellow-400 text-black':'bg-purple-600 text-white'}">${x.jenis}</span></div><div class="text-right"><b class="text-[13px] ${x.jenis==='Masuk'?'text-green-400':'text-red-400'}">${x.jenis==='Masuk'?'+':'-'} ${fmt(x.nom)}</b><br><div class="flex gap-1 justify-end mt-1"><button class="bg-yellow-400 text-black px-2 py-1 rounded text-[11px] font-bold" onclick="editTransaksi(${x.id})">Edit</button><button class="bg-red-600 text-white px-2 py-1 rounded text-[11px] font-bold" onclick="delTransaksi(${x.id})">Hapus</button></div></div></div>`).join('');
+document.getElementById('targetDarurat').value=data.darurat.target||'';document.getElementById('isiDarurat').value=data.darurat.isi||'';
+let p=data.darurat.target?Math.min(100,Math.round(data.darurat.isi/data.darurat.target*100)):0;document.getElementById('barDarurat').style.width=p+'%';document.getElementById('infoDarurat').innerText=`${p}% — Kurang ${fmt((data.darurat.target||0)-(data.darurat.isi||0))} lagi!`;
+document.getElementById('listSinking').innerHTML=data.sinking.map(s=>{let pp=s.target?Math.round(s.isi/s.target*100):0;return `<div class="card"><div class="flex justify-between"><b>${s.nama}</b><span>${pp}%</span></div><div class="bg-[#1e1e1e] h-2.5 rounded-full mt-2 overflow-hidden border border-[#333]"><div class="bg-yellow-400 h-2.5" style="width:${pp}%"></div></div><p class="text-xs text-zinc-400 mt-1">${fmt(s.isi)} / ${fmt(s.target)}</p><div class="flex gap-2 mt-2"><button class="bg-yellow-400 text-black px-2 py-1 rounded text-xs font-bold flex-1" onclick="tambahSinking(${s.id})">+ Tambah</button><button class="bg-red-600 text-white px-2 py-1 rounded text-xs font-bold" onclick="delSinking(${s.id})">Hapus</button></div></div>`}).join('');
+}
+loadData();loadSettingToForm();render();goMenu('transaksi');
+</script>
+</body>
+</html>
